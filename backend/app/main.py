@@ -23,11 +23,13 @@ from app.schemas import (
     UserRegisterRequest, UserLoginRequest, TokenResponse, UserResponse,
     CandidateProfileUpdate, CandidateProfileResponse, ResumeResponse,
     JobDescriptionCreate, JobDescriptionResponse,
-    InterviewCreate, InterviewResponse, MatchBreakdownResponse, CandidateMatchDetail
+    InterviewCreate, InterviewResponse, MatchBreakdownResponse, CandidateMatchDetail,
+    InterviewQuestionCreate, InterviewQuestionUpdate, InterviewQuestionResponse
 )
 from app.ai.resume_parser import parse_resume_document
 from app.ai.jd_analyzer import analyze_job_description
 from app.ai.matcher import match_resume_to_jd
+from app.ai.question_generator import generate_personalized_questions
 
 # Initialize database schema
 Base.metadata.create_all(bind=engine)
@@ -37,9 +39,9 @@ UPLOAD_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "uplo
 os.makedirs(UPLOAD_DIR, exist_ok=True)
 
 app = FastAPI(
-    title="AI Interview Platform - Phase 2",
-    description="Resume parsing, job description analysis, and semantic resume-JD matching engine.",
-    version="2.0.0"
+    title="AI Interview Platform - Phase 3",
+    description="AI-powered personalized interview question generation, question management, resume parsing, and resume-JD matching.",
+    version="3.0.0"
 )
 
 # Enable CORS for frontend
@@ -51,7 +53,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# ----------------- SEED DATA HELPER (PHASE 2 READY) -----------------
+# ----------------- SEED DATA HELPER (PHASE 3 READY) -----------------
 def init_seed_data():
     db = SessionLocal()
     try:
@@ -174,6 +176,26 @@ def init_seed_data():
             )
             db.add(interview1)
             db.commit()
+            db.refresh(interview1)
+
+            # Auto-generate Phase 3 Questions for the demo interview
+            generated_qs = generate_personalized_questions(
+                resume_parsed=resume_parsed_mock,
+                jd_parsed=jd_parsed,
+                job_role=interview1.job_role,
+                target_count=7
+            )
+            for q in generated_qs:
+                new_q = InterviewQuestion(
+                    interview_id=interview1.id,
+                    question_text=q["question_text"],
+                    category=q["category"],
+                    difficulty=q["difficulty"],
+                    order_index=q["order_index"],
+                    is_custom=q.get("is_custom", 0)
+                )
+                db.add(new_q)
+            db.commit()
     finally:
         db.close()
 
@@ -185,7 +207,6 @@ def get_or_calculate_match(db: Session, resume: Resume, jd: JobDescription) -> O
     if not resume or not jd:
         return None
     
-    # Check if match already computed
     match_record = db.query(ResumeJobMatch).filter(
         ResumeJobMatch.resume_id == resume.id,
         ResumeJobMatch.job_description_id == jd.id
@@ -194,7 +215,6 @@ def get_or_calculate_match(db: Session, resume: Resume, jd: JobDescription) -> O
     if match_record:
         return match_record
 
-    # Parse resume if needed
     resume_parsed = json.loads(resume.parsed_data) if resume.parsed_data else None
     if not resume_parsed:
         parse_res = parse_resume_document(resume.file_path, resume.file_type)
@@ -205,7 +225,6 @@ def get_or_calculate_match(db: Session, resume: Resume, jd: JobDescription) -> O
         db.refresh(resume)
         resume_parsed = parse_res["parsed_data"]
 
-    # Parse JD if needed
     jd_parsed = json.loads(jd.parsed_data) if jd.parsed_data else None
     if not jd_parsed:
         jd_parsed = analyze_job_description(jd.title, jd.description_text, jd.requirements or "")
@@ -213,7 +232,6 @@ def get_or_calculate_match(db: Session, resume: Resume, jd: JobDescription) -> O
         db.commit()
         db.refresh(jd)
 
-    # Perform AI semantic matching
     match_result = match_resume_to_jd(
         resume_parsed,
         jd_parsed,
@@ -264,6 +282,48 @@ def format_resume_response(r: Resume) -> ResumeResponse:
         uploaded_at=r.uploaded_at
     )
 
+def format_question_response(q: InterviewQuestion) -> InterviewQuestionResponse:
+    return InterviewQuestionResponse(
+        id=q.id,
+        interview_id=q.interview_id,
+        question_text=q.question_text,
+        category=q.category or "Technical",
+        difficulty=q.difficulty or "Medium",
+        order_index=q.order_index or 0,
+        is_custom=q.is_custom or 0,
+        created_at=q.created_at,
+        updated_at=q.updated_at
+    )
+
+def format_interview_response(it: Interview, db: Session) -> InterviewResponse:
+    match_data = None
+    if it.candidate and it.candidate.candidate_profile and it.candidate.candidate_profile.resumes and it.job_description:
+        latest_resume = sorted(it.candidate.candidate_profile.resumes, key=lambda r: r.uploaded_at, reverse=True)[0]
+        match_obj = get_or_calculate_match(db, latest_resume, it.job_description)
+        if match_obj:
+            match_data = format_match_response(match_obj, it.job_description.title)
+
+    questions_formatted = [format_question_response(q) for q in it.questions]
+
+    return InterviewResponse(
+        id=it.id,
+        title=it.title,
+        job_role=it.job_role,
+        interviewer_id=it.interviewer_id,
+        interviewer_name=it.interviewer.full_name if it.interviewer else None,
+        candidate_id=it.candidate_id,
+        candidate_name=it.candidate.full_name if it.candidate else None,
+        candidate_email=it.candidate.email if it.candidate else None,
+        job_description_id=it.job_description_id,
+        job_description_title=it.job_description.title if it.job_description else None,
+        scheduled_time=it.scheduled_time,
+        status=it.status.value,
+        notes=it.notes,
+        created_at=it.created_at,
+        match_score=match_data,
+        questions=questions_formatted
+    )
+
 # ----------------- AUTH ROUTING -----------------
 
 @app.post("/api/auth/register", response_model=TokenResponse)
@@ -282,7 +342,6 @@ def register(user_in: UserRegisterRequest, db: Session = Depends(get_db)):
     db.commit()
     db.refresh(new_user)
 
-    # If Candidate, auto-generate initial profile
     if new_user.role == UserRole.CANDIDATE:
         profile = CandidateProfile(user_id=new_user.id)
         db.add(profile)
@@ -386,7 +445,6 @@ async def upload_resume(
     current_user: User = Depends(require_candidate),
     db: Session = Depends(get_db)
 ):
-    # Validate extension
     file_ext = file.filename.split(".")[-1].lower() if "." in file.filename else ""
     if file_ext not in ["pdf", "docx"]:
         raise HTTPException(
@@ -401,20 +459,17 @@ async def upload_resume(
         db.commit()
         db.refresh(profile)
 
-    # Save to disk securely with UUID prefix
     unique_filename = f"{uuid.uuid4()}_{file.filename}"
     file_path = os.path.join(UPLOAD_DIR, unique_filename)
 
     file_size = 0
     async with aiofiles.open(file_path, "wb") as out_file:
-        while content := await file.read(1024 * 1024): # 1MB chunks
+        while content := await file.read(1024 * 1024):
             file_size += len(content)
             await out_file.write(content)
 
-    # Phase 2: Execute Resume Extraction
     parse_result = parse_resume_document(file_path, file_ext, profile.headline or "")
     
-    # Also auto-update candidate skills and experience if blank
     if not profile.skills and parse_result["parsed_data"].get("skills"):
         profile.skills = ", ".join(parse_result["parsed_data"]["skills"])
     if profile.experience_years == 0 and parse_result["parsed_data"].get("work_experience", {}).get("estimated_years"):
@@ -436,7 +491,6 @@ async def upload_resume(
     db.commit()
     db.refresh(resume)
 
-    # Trigger auto-matching for any existing job descriptions
     all_jds = db.query(JobDescription).all()
     for jd in all_jds:
         get_or_calculate_match(db, resume, jd)
@@ -454,41 +508,7 @@ def get_candidate_interviews(
         .order_by(desc(Interview.scheduled_time))
         .all()
     )
-    
-    # Get candidate latest resume for match calculation
-    profile = db.query(CandidateProfile).filter(CandidateProfile.user_id == current_user.id).first()
-    latest_resume = None
-    if profile and profile.resumes:
-        latest_resume = sorted(profile.resumes, key=lambda r: r.uploaded_at, reverse=True)[0]
-
-    results = []
-    for it in interviews:
-        match_data = None
-        if latest_resume and it.job_description:
-            match_obj = get_or_calculate_match(db, latest_resume, it.job_description)
-            if match_obj:
-                match_data = format_match_response(match_obj, it.job_description.title)
-
-        results.append(
-            InterviewResponse(
-                id=it.id,
-                title=it.title,
-                job_role=it.job_role,
-                interviewer_id=it.interviewer_id,
-                interviewer_name=it.interviewer.full_name if it.interviewer else None,
-                candidate_id=it.candidate_id,
-                candidate_name=it.candidate.full_name if it.candidate else None,
-                candidate_email=it.candidate.email if it.candidate else None,
-                job_description_id=it.job_description_id,
-                job_description_title=it.job_description.title if it.job_description else None,
-                scheduled_time=it.scheduled_time,
-                status=it.status.value,
-                notes=it.notes,
-                created_at=it.created_at,
-                match_score=match_data
-            )
-        )
-    return results
+    return [format_interview_response(it, db) for it in interviews]
 
 # ----------------- INTERVIEWER ENDPOINTS -----------------
 
@@ -500,7 +520,6 @@ def get_all_candidates_with_matches(
 ):
     candidates = db.query(User).filter(User.role == UserRole.CANDIDATE).all()
     
-    # Target JD for matching context
     target_jd = None
     if job_description_id:
         target_jd = db.query(JobDescription).filter(JobDescription.id == job_description_id).first()
@@ -562,7 +581,6 @@ def create_job_description(
     current_user: User = Depends(require_interviewer),
     db: Session = Depends(get_db)
 ):
-    # Phase 2: Analyze JD content structured extraction
     parsed_info = analyze_job_description(jd_in.title, jd_in.description_text, jd_in.requirements or "")
 
     new_jd = JobDescription(
@@ -577,7 +595,6 @@ def create_job_description(
     db.commit()
     db.refresh(new_jd)
 
-    # Auto compute matches with existing uploaded resumes
     all_resumes = db.query(Resume).all()
     for resume in all_resumes:
         get_or_calculate_match(db, resume, new_jd)
@@ -617,31 +634,38 @@ def create_interview(
     db.commit()
     db.refresh(new_interview)
 
-    # Compute match if candidate has a resume
-    match_data = None
-    if candidate.candidate_profile and candidate.candidate_profile.resumes and new_interview.job_description:
-        latest_resume = sorted(candidate.candidate_profile.resumes, key=lambda r: r.uploaded_at, reverse=True)[0]
-        match_obj = get_or_calculate_match(db, latest_resume, new_interview.job_description)
-        if match_obj:
-            match_data = format_match_response(match_obj, new_interview.job_description.title)
+    # Phase 3: Auto-generate questions on creation
+    cand_resume_parsed = None
+    if candidate.candidate_profile and candidate.candidate_profile.resumes:
+        latest_r = sorted(candidate.candidate_profile.resumes, key=lambda r: r.uploaded_at, reverse=True)[0]
+        if latest_r.parsed_data:
+            cand_resume_parsed = json.loads(latest_r.parsed_data)
 
-    return InterviewResponse(
-        id=new_interview.id,
-        title=new_interview.title,
+    jd_parsed = None
+    if new_interview.job_description and new_interview.job_description.parsed_data:
+        jd_parsed = json.loads(new_interview.job_description.parsed_data)
+
+    generated_qs = generate_personalized_questions(
+        resume_parsed=cand_resume_parsed,
+        jd_parsed=jd_parsed,
         job_role=new_interview.job_role,
-        interviewer_id=new_interview.interviewer_id,
-        interviewer_name=current_user.full_name,
-        candidate_id=new_interview.candidate_id,
-        candidate_name=candidate.full_name,
-        candidate_email=candidate.email,
-        job_description_id=new_interview.job_description_id,
-        job_description_title=new_interview.job_description.title if new_interview.job_description else None,
-        scheduled_time=new_interview.scheduled_time,
-        status=new_interview.status.value,
-        notes=new_interview.notes,
-        created_at=new_interview.created_at,
-        match_score=match_data
+        target_count=7
     )
+
+    for q in generated_qs:
+        new_q = InterviewQuestion(
+            interview_id=new_interview.id,
+            question_text=q["question_text"],
+            category=q["category"],
+            difficulty=q["difficulty"],
+            order_index=q["order_index"],
+            is_custom=0
+        )
+        db.add(new_q)
+    db.commit()
+    db.refresh(new_interview)
+
+    return format_interview_response(new_interview, db)
 
 @app.get("/api/interviewer/interviews", response_model=List[InterviewResponse])
 def get_interviewer_interviews(
@@ -654,37 +678,147 @@ def get_interviewer_interviews(
         .order_by(desc(Interview.scheduled_time))
         .all()
     )
-    
-    results = []
-    for it in interviews:
-        match_data = None
-        if it.candidate and it.candidate.candidate_profile and it.candidate.candidate_profile.resumes and it.job_description:
-            latest_resume = sorted(it.candidate.candidate_profile.resumes, key=lambda r: r.uploaded_at, reverse=True)[0]
-            match_obj = get_or_calculate_match(db, latest_resume, it.job_description)
-            if match_obj:
-                match_data = format_match_response(match_obj, it.job_description.title)
+    return [format_interview_response(it, db) for it in interviews]
 
-        results.append(
-            InterviewResponse(
-                id=it.id,
-                title=it.title,
-                job_role=it.job_role,
-                interviewer_id=it.interviewer_id,
-                interviewer_name=it.interviewer.full_name if it.interviewer else None,
-                candidate_id=it.candidate_id,
-                candidate_name=it.candidate.full_name if it.candidate else None,
-                candidate_email=it.candidate.email if it.candidate else None,
-                job_description_id=it.job_description_id,
-                job_description_title=it.job_description.title if it.job_description else None,
-                scheduled_time=it.scheduled_time,
-                status=it.status.value,
-                notes=it.notes,
-                created_at=it.created_at,
-                match_score=match_data
-            )
+@app.get("/api/interviews/{interview_id}", response_model=InterviewResponse)
+def get_interview_detail(
+    interview_id: int,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    interview = db.query(Interview).filter(Interview.id == interview_id).first()
+    if not interview:
+        raise HTTPException(status_code=404, detail="Interview not found")
+    
+    # Check access permission
+    if current_user.role == UserRole.CANDIDATE and interview.candidate_id != current_user.id:
+        raise HTTPException(status_code=403, detail="Access forbidden")
+    if current_user.role == UserRole.INTERVIEWER and interview.interviewer_id != current_user.id:
+        raise HTTPException(status_code=403, detail="Access forbidden")
+
+    return format_interview_response(interview, db)
+
+# ----------------- PHASE 3: QUESTION MANAGEMENT ENDPOINTS -----------------
+
+@app.post("/api/interviews/{interview_id}/questions/generate", response_model=List[InterviewQuestionResponse])
+def regenerate_interview_questions(
+    interview_id: int,
+    current_user: User = Depends(require_interviewer),
+    db: Session = Depends(get_db)
+):
+    """Regenerates AI questions for the interview upon explicit request"""
+    interview = db.query(Interview).filter(Interview.id == interview_id, Interview.interviewer_id == current_user.id).first()
+    if not interview:
+        raise HTTPException(status_code=404, detail="Interview not found")
+
+    # Wipe existing AI questions (keep custom or wipe all)
+    db.query(InterviewQuestion).filter(InterviewQuestion.interview_id == interview.id).delete()
+    db.commit()
+
+    cand_resume_parsed = None
+    if interview.candidate and interview.candidate.candidate_profile and interview.candidate.candidate_profile.resumes:
+        latest_r = sorted(interview.candidate.candidate_profile.resumes, key=lambda r: r.uploaded_at, reverse=True)[0]
+        if latest_r.parsed_data:
+            cand_resume_parsed = json.loads(latest_r.parsed_data)
+
+    jd_parsed = None
+    if interview.job_description and interview.job_description.parsed_data:
+        jd_parsed = json.loads(interview.job_description.parsed_data)
+
+    new_qs = generate_personalized_questions(
+        resume_parsed=cand_resume_parsed,
+        jd_parsed=jd_parsed,
+        job_role=interview.job_role,
+        target_count=7
+    )
+
+    created_questions = []
+    for q in new_qs:
+        q_obj = InterviewQuestion(
+            interview_id=interview.id,
+            question_text=q["question_text"],
+            category=q["category"],
+            difficulty=q["difficulty"],
+            order_index=q["order_index"],
+            is_custom=0
         )
-    return results
+        db.add(q_obj)
+        db.commit()
+        db.refresh(q_obj)
+        created_questions.append(format_question_response(q_obj))
+
+    return created_questions
+
+@app.post("/api/interviews/{interview_id}/questions", response_model=InterviewQuestionResponse)
+def add_custom_question(
+    interview_id: int,
+    question_in: InterviewQuestionCreate,
+    current_user: User = Depends(require_interviewer),
+    db: Session = Depends(get_db)
+):
+    interview = db.query(Interview).filter(Interview.id == interview_id, Interview.interviewer_id == current_user.id).first()
+    if not interview:
+        raise HTTPException(status_code=404, detail="Interview not found")
+
+    max_order = len(interview.questions)
+    new_q = InterviewQuestion(
+        interview_id=interview.id,
+        question_text=question_in.question_text,
+        category=question_in.category or "Technical",
+        difficulty=question_in.difficulty or "Medium",
+        order_index=max_order + 1,
+        is_custom=1
+    )
+    db.add(new_q)
+    db.commit()
+    db.refresh(new_q)
+    return format_question_response(new_q)
+
+@app.put("/api/interviews/questions/{question_id}", response_model=InterviewQuestionResponse)
+def update_question(
+    question_id: int,
+    question_update: InterviewQuestionUpdate,
+    current_user: User = Depends(require_interviewer),
+    db: Session = Depends(get_db)
+):
+    q = db.query(InterviewQuestion).filter(InterviewQuestion.id == question_id).first()
+    if not q:
+        raise HTTPException(status_code=404, detail="Question not found")
+    
+    if q.interview.interviewer_id != current_user.id:
+        raise HTTPException(status_code=403, detail="Forbidden")
+
+    if question_update.question_text is not None:
+        q.question_text = question_update.question_text
+    if question_update.category is not None:
+        q.category = question_update.category
+    if question_update.difficulty is not None:
+        q.difficulty = question_update.difficulty
+    if question_update.order_index is not None:
+        q.order_index = question_update.order_index
+
+    q.updated_at = datetime.utcnow()
+    db.commit()
+    db.refresh(q)
+    return format_question_response(q)
+
+@app.delete("/api/interviews/questions/{question_id}")
+def delete_question(
+    question_id: int,
+    current_user: User = Depends(require_interviewer),
+    db: Session = Depends(get_db)
+):
+    q = db.query(InterviewQuestion).filter(InterviewQuestion.id == question_id).first()
+    if not q:
+        raise HTTPException(status_code=404, detail="Question not found")
+    
+    if q.interview.interviewer_id != current_user.id:
+        raise HTTPException(status_code=403, detail="Forbidden")
+
+    db.delete(q)
+    db.commit()
+    return {"status": "success", "message": "Question deleted successfully"}
 
 @app.get("/api/health")
 def health_check():
-    return {"status": "ok", "phase": "Phase 2 - AI Resume & JD Matcher"}
+    return {"status": "ok", "phase": "Phase 3 - AI Question Generation & Management"}

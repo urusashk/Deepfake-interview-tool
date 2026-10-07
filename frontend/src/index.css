@@ -159,6 +159,10 @@ p {
   border-color: #fecaca;
 }
 
+.btn-danger:hover {
+  background-color: #fee2e2;
+}
+
 .btn-sm {
   padding: 0.35rem 0.75rem;
   font-size: 0.8rem;
@@ -275,6 +279,36 @@ p {
   color: #334155;
   border: 1px solid #cbd5e1;
   text-transform: capitalize;
+}
+
+/* Difficulty Badges */
+.badge-diff-easy {
+  background-color: #f0fdf4;
+  color: #166534;
+  border: 1px solid #bbf7d0;
+  font-weight: 600;
+}
+
+.badge-diff-medium {
+  background-color: #fffbeb;
+  color: #b45309;
+  border: 1px solid #fde68a;
+  font-weight: 600;
+}
+
+.badge-diff-hard {
+  background-color: #fef2f2;
+  color: #b91c1c;
+  border: 1px solid #fecaca;
+  font-weight: 600;
+}
+
+/* Category Badges */
+.badge-cat {
+  background-color: #f8fafc;
+  color: #475569;
+  border: 1px solid #e2e8f0;
+  font-size: 0.75rem;
 }
 
 /* Tables */
@@ -418,28 +452,30 @@ p {
   margin-top: 0.25rem;
 }
 
-/* Modals / Tabs */
-.tab-group {
+/* Question List & Question Item */
+.question-item {
+  background-color: #ffffff;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md);
+  padding: 1rem 1.25rem;
+  transition: border-color 0.15s ease;
+}
+
+.question-item:hover {
+  border-color: #cbd5e1;
+}
+
+.question-header {
   display: flex;
-  border-bottom: 1px solid var(--border-color);
-  margin-bottom: 1.5rem;
-  gap: 1.5rem;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 0.5rem;
+  flex-wrap: wrap;
+  gap: 0.5rem;
 }
 
-.tab-btn {
-  padding: 0.65rem 0.25rem;
-  border: none;
-  background: transparent;
-  font-size: 0.9rem;
-  font-weight: 500;
-  color: var(--text-secondary);
-  cursor: pointer;
-  border-bottom: 2px solid transparent;
-  margin-bottom: -1px;
-}
-
-.tab-btn.active {
-  color: var(--primary);
-  border-bottom-color: var(--primary);
-  font-weight: 600;
+.question-badges {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
 }

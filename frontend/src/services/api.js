@@ -90,4 +90,21 @@ export const api = {
     body: JSON.stringify(payload),
   }),
   getInterviewerInterviews: () => apiRequest('/interviewer/interviews'),
+  getInterviewDetail: (interviewId) => apiRequest(`/interviews/${interviewId}`),
+
+  // Phase 3 Question Management
+  regenerateQuestions: (interviewId) => apiRequest(`/interviews/${interviewId}/questions/generate`, {
+    method: 'POST',
+  }),
+  addCustomQuestion: (interviewId, payload) => apiRequest(`/interviews/${interviewId}/questions`, {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  }),
+  updateQuestion: (questionId, payload) => apiRequest(`/interviews/questions/${questionId}`, {
+    method: 'PUT',
+    body: JSON.stringify(payload),
+  }),
+  deleteQuestion: (questionId) => apiRequest(`/interviews/questions/${questionId}`, {
+    method: 'DELETE',
+  }),
 };

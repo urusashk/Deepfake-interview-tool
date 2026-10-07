@@ -109,6 +109,32 @@ class JobDescriptionResponse(BaseModel):
     class Config:
         from_attributes = True
 
+# Question Schemas (Phase 3)
+class InterviewQuestionCreate(BaseModel):
+    question_text: str
+    category: Optional[str] = "Technical"
+    difficulty: Optional[str] = "Medium"
+
+class InterviewQuestionUpdate(BaseModel):
+    question_text: Optional[str] = None
+    category: Optional[str] = None
+    difficulty: Optional[str] = None
+    order_index: Optional[int] = None
+
+class InterviewQuestionResponse(BaseModel):
+    id: int
+    interview_id: int
+    question_text: str
+    category: str
+    difficulty: str
+    order_index: int
+    is_custom: int
+    created_at: datetime
+    updated_at: Optional[datetime] = None
+
+    class Config:
+        from_attributes = True
+
 # Interview Schemas
 class InterviewCreate(BaseModel):
     title: str
@@ -134,6 +160,7 @@ class InterviewResponse(BaseModel):
     notes: Optional[str]
     created_at: datetime
     match_score: Optional[MatchBreakdownResponse] = None
+    questions: List[InterviewQuestionResponse] = []
 
     class Config:
         from_attributes = True

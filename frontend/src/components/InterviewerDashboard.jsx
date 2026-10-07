@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { api } from '../services/api';
+import InterviewDetailModal from './InterviewDetailModal';
 
 export default function InterviewerDashboard({ user }) {
   const [activeTab, setActiveTab] = useState('interviews'); // 'interviews', 'create-interview', 'job-descriptions', 'candidates'
@@ -12,6 +13,9 @@ export default function InterviewerDashboard({ user }) {
 
   // Selected JD for filtering candidate matches
   const [filterJdId, setFilterJdId] = useState('');
+
+  // Selected Interview for Question Prep Modal (Phase 3)
+  const [selectedInterviewId, setSelectedInterviewId] = useState(null);
 
   // Create Interview Form State
   const [interviewTitle, setInterviewTitle] = useState('');
@@ -86,7 +90,7 @@ export default function InterviewerDashboard({ user }) {
       setError('');
       setSuccessMsg('');
 
-      await api.createInterview({
+      const created = await api.createInterview({
         title: interviewTitle || `${jobRole} - Technical Round`,
         job_role: jobRole || 'Software Engineer',
         candidate_id: parseInt(selectedCandidateId, 10),
@@ -95,15 +99,16 @@ export default function InterviewerDashboard({ user }) {
         notes: interviewNotes,
       });
 
-      setSuccessMsg('Interview scheduled successfully with automatic AI resume matching!');
+      setSuccessMsg('Interview scheduled successfully! AI questions have been generated.');
       setInterviewTitle('');
       setInterviewNotes('');
       setScheduledTime('');
       setActiveTab('interviews');
       
-      // Reload interviews
+      // Reload interviews and open question prep modal
       const updatedInterviews = await api.getInterviewerInterviews();
       setInterviews(updatedInterviews);
+      setSelectedInterviewId(created.id);
     } catch (err) {
       setError(err.message || 'Failed to create interview');
     } finally {
@@ -184,7 +189,7 @@ export default function InterviewerDashboard({ user }) {
         </div>
 
         <div style={{ fontSize: '0.75rem', color: '#94a3b8', padding: '0 0.5rem' }}>
-          Phase 2 AI Matcher
+          Phase 3 AI Question Prep
         </div>
       </aside>
 
@@ -204,8 +209,8 @@ export default function InterviewerDashboard({ user }) {
               <div className="card">
                 <div className="card-header">
                   <div>
-                    <h2 className="card-title">Scheduled Interviews & Match Summary</h2>
-                    <p className="card-description">All sessions with integrated AI Resume–JD alignment</p>
+                    <h2 className="card-title">Scheduled Interviews & Question Preparation</h2>
+                    <p className="card-description">View, edit, or regenerate personalized questions for every session</p>
                   </div>
                   <button
                     className="btn btn-primary btn-sm"
@@ -230,8 +235,9 @@ export default function InterviewerDashboard({ user }) {
                           <th>Candidate</th>
                           <th>Role / JD</th>
                           <th>Resume Match</th>
+                          <th>Questions</th>
                           <th>Scheduled Time</th>
-                          <th>Status</th>
+                          <th>Action</th>
                         </tr>
                       </thead>
                       <tbody>
@@ -255,9 +261,19 @@ export default function InterviewerDashboard({ user }) {
                                 <span style={{ fontSize: '0.75rem', color: '#94a3b8' }}>Pending resume</span>
                               )}
                             </td>
+                            <td>
+                              <span className="badge badge-role">
+                                {i.questions?.length || 0} Questions
+                              </span>
+                            </td>
                             <td>{new Date(i.scheduled_time).toLocaleString()}</td>
                             <td>
-                              <span className="badge badge-scheduled">{i.status}</span>
+                              <button
+                                className="btn btn-outline-primary btn-sm"
+                                onClick={() => setSelectedInterviewId(i.id)}
+                              >
+                                View / Edit Questions
+                              </button>
                             </td>
                           </tr>
                         ))}
@@ -412,7 +428,7 @@ export default function InterviewerDashboard({ user }) {
                 <div className="card-header">
                   <div>
                     <h2 className="card-title">Create & Schedule Interview</h2>
-                    <p className="card-description">Assign candidates, select roles, and specify interview timings</p>
+                    <p className="card-description">Assign candidates, select roles, and generate AI personalized questions automatically</p>
                   </div>
                 </div>
 
@@ -516,7 +532,7 @@ export default function InterviewerDashboard({ user }) {
                         className="btn btn-primary"
                         disabled={creatingInterview}
                       >
-                        {creatingInterview ? 'Scheduling...' : 'Schedule Interview'}
+                        {creatingInterview ? 'Scheduling & Generating Questions...' : 'Schedule Interview'}
                       </button>
                     </div>
                   </form>
@@ -656,6 +672,17 @@ export default function InterviewerDashboard({ user }) {
           </>
         )}
       </main>
+
+      {/* Phase 3 Interview Detail & Question Prep Modal */}
+      {selectedInterviewId && (
+        <InterviewDetailModal
+          interviewId={selectedInterviewId}
+          onClose={() => {
+            setSelectedInterviewId(null);
+            loadDashboardData();
+          }}
+        />
+      )}
     </div>
   );
 }

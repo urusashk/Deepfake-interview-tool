@@ -14,6 +14,18 @@ class InterviewStatus(str, enum.Enum):
     COMPLETED = "completed"
     CANCELLED = "cancelled"
 
+class QuestionDifficulty(str, enum.Enum):
+    EASY = "Easy"
+    MEDIUM = "Medium"
+    HARD = "Hard"
+
+class QuestionCategory(str, enum.Enum):
+    TECHNICAL = "Technical"
+    RESUME_PROJECT = "Resume/Project"
+    ROLE_SPECIFIC = "Role-Specific"
+    EXPERIENCE_BASED = "Experience-Based"
+    SITUATIONAL = "Situational"
+
 class User(Base):
     __tablename__ = "users"
 
@@ -125,19 +137,22 @@ class Interview(Base):
     interviewer = relationship("User", foreign_keys=[interviewer_id], back_populates="created_interviews")
     candidate = relationship("User", foreign_keys=[candidate_id], back_populates="assigned_interviews")
     job_description = relationship("JobDescription", back_populates="interviews")
-    questions = relationship("InterviewQuestion", back_populates="interview", cascade="all, delete-orphan")
+    questions = relationship("InterviewQuestion", back_populates="interview", cascade="all, delete-orphan", order_by="InterviewQuestion.order_index")
     results = relationship("InterviewResult", back_populates="interview", cascade="all, delete-orphan")
 
 class InterviewQuestion(Base):
-    """Placeholder model for questions to be generated or linked in upcoming phases"""
+    """Phase 3: AI-generated & custom questions with category, difficulty, and order"""
     __tablename__ = "interview_questions"
 
     id = Column(Integer, primary_key=True, index=True)
     interview_id = Column(Integer, ForeignKey("interviews.id", ondelete="CASCADE"), nullable=False)
     question_text = Column(Text, nullable=False)
+    category = Column(String(100), default="Technical") # Technical, Resume/Project, Role-Specific, Experience-Based, Situational
+    difficulty = Column(String(50), default="Medium") # Easy, Medium, Hard
     order_index = Column(Integer, default=0)
-    category = Column(String(100), default="Technical")
+    is_custom = Column(Integer, default=0) # 0 for AI generated, 1 for interviewer added
     created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
     interview = relationship("Interview", back_populates="questions")
 
