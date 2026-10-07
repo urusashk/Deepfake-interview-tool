@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { api } from '../services/api';
 
 export default function CandidateDashboard({ user }) {
-  const [activeTab, setActiveTab] = useState('interviews'); // 'interviews', 'resumes', 'profile'
+  const [activeTab, setActiveTab] = useState('interviews'); // 'interviews', 'resumes', 'parsed-view', 'profile'
   const [profile, setProfile] = useState(null);
   const [interviews, setInterviews] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -80,10 +80,15 @@ export default function CandidateDashboard({ user }) {
       setSuccessMsg('');
       await api.uploadResume(selectedFile);
       setSelectedFile(null);
-      setSuccessMsg('Resume uploaded successfully.');
-      // Refresh profile data to see updated resume list
-      const updatedProfile = await api.getCandidateProfile();
+      setSuccessMsg('Resume uploaded & parsed successfully! Structured details extracted.');
+      // Refresh candidate profile & interview data
+      const [updatedProfile, updatedInterviews] = await Promise.all([
+        api.getCandidateProfile(),
+        api.getCandidateInterviews()
+      ]);
       setProfile(updatedProfile);
+      setInterviews(updatedInterviews);
+      setActiveTab('parsed-view');
     } catch (err) {
       setError(err.message || 'Resume upload failed');
     } finally {
@@ -97,6 +102,11 @@ export default function CandidateDashboard({ user }) {
   const previousInterviews = interviews.filter(
     (i) => i.status.toLowerCase() !== 'scheduled'
   );
+
+  const latestResume = profile?.resumes && profile.resumes.length > 0
+    ? profile.resumes[profile.resumes.length - 1]
+    : null;
+  const parsedData = latestResume?.parsed_data;
 
   return (
     <div className="dashboard-layout">
@@ -114,13 +124,19 @@ export default function CandidateDashboard({ user }) {
               className={`nav-item ${activeTab === 'interviews' ? 'active' : ''}`}
               onClick={() => setActiveTab('interviews')}
             >
-              <span>📅</span> My Interviews
+              <span>📅</span> My Interviews & Matches
             </button>
             <button
               className={`nav-item ${activeTab === 'resumes' ? 'active' : ''}`}
               onClick={() => setActiveTab('resumes')}
             >
               <span>📄</span> Resume Upload
+            </button>
+            <button
+              className={`nav-item ${activeTab === 'parsed-view' ? 'active' : ''}`}
+              onClick={() => setActiveTab('parsed-view')}
+            >
+              <span>🤖</span> Parsed Resume View
             </button>
             <button
               className={`nav-item ${activeTab === 'profile' ? 'active' : ''}`}
@@ -132,7 +148,7 @@ export default function CandidateDashboard({ user }) {
         </div>
 
         <div style={{ fontSize: '0.75rem', color: '#94a3b8', padding: '0 0.5rem' }}>
-          Phase 1 Foundation UI
+          Phase 2 AI Matcher
         </div>
       </aside>
 
@@ -147,14 +163,14 @@ export default function CandidateDashboard({ user }) {
           </div>
         ) : (
           <>
-            {/* TAB 1: INTERVIEWS */}
+            {/* TAB 1: INTERVIEWS & MATCH SCORES */}
             {activeTab === 'interviews' && (
               <div style={{ display: 'flex', flexDirection: 'column', gap: '2rem' }}>
                 <div>
                   <div className="card-header">
                     <div>
-                      <h2 className="card-title">Upcoming Interviews</h2>
-                      <p className="card-description">Interviews scheduled with hiring teams</p>
+                      <h2 className="card-title">Upcoming Interviews & Resume Matches</h2>
+                      <p className="card-description">Assigned interview rounds with real-time AI JD matching metrics</p>
                     </div>
                   </div>
 
@@ -165,31 +181,76 @@ export default function CandidateDashboard({ user }) {
                       <div className="empty-state-desc">You will be notified once an interviewer schedules a session.</div>
                     </div>
                   ) : (
-                    <div className="table-container">
-                      <table className="data-table">
-                        <thead>
-                          <tr>
-                            <th>Interview Title</th>
-                            <th>Job Role</th>
-                            <th>Interviewer</th>
-                            <th>Scheduled Date & Time</th>
-                            <th>Status</th>
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {upcomingInterviews.map((item) => (
-                            <tr key={item.id}>
-                              <td><strong>{item.title}</strong></td>
-                              <td>{item.job_role}</td>
-                              <td>{item.interviewer_name || 'Hiring Lead'}</td>
-                              <td>{new Date(item.scheduled_time).toLocaleString()}</td>
-                              <td>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '1.25rem' }}>
+                      {upcomingInterviews.map((item) => (
+                        <div key={item.id} className="card" style={{ borderLeft: '4px solid #2563eb' }}>
+                          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: '1rem', marginBottom: '1rem' }}>
+                            <div>
+                              <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.25rem' }}>
+                                <h3 style={{ fontSize: '1.15rem' }}>{item.title}</h3>
                                 <span className="badge badge-scheduled">{item.status}</span>
-                              </td>
-                            </tr>
-                          ))}
-                        </tbody>
-                      </table>
+                              </div>
+                              <p style={{ fontSize: '0.875rem', color: '#475569' }}>
+                                <strong>Role:</strong> {item.job_role} &nbsp;|&nbsp; <strong>Interviewer:</strong> {item.interviewer_name || 'Hiring Lead'} &nbsp;|&nbsp; <strong>Date:</strong> {new Date(item.scheduled_time).toLocaleString()}
+                              </p>
+                            </div>
+
+                            {/* Match Score Badge */}
+                            {item.match_score ? (
+                              <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', background: '#f0fdf4', padding: '0.5rem 1rem', borderRadius: '8px', border: '1px solid #bbf7d0' }}>
+                                <div style={{ fontSize: '0.8rem', color: '#166534', fontWeight: 600 }}>
+                                  Resume Match
+                                </div>
+                                <div style={{ fontSize: '1.4rem', fontWeight: 700, color: '#15803d' }}>
+                                  {Math.round(item.match_score.overall_match_score)}%
+                                </div>
+                              </div>
+                            ) : (
+                              <div style={{ fontSize: '0.8rem', color: '#64748b', background: '#f8fafc', padding: '0.4rem 0.8rem', borderRadius: '6px', border: '1px solid #e2e8f0' }}>
+                                Upload resume for AI match
+                              </div>
+                            )}
+                          </div>
+
+                          {/* Detailed Match Score Breakdown if available */}
+                          {item.match_score && (
+                            <div style={{ marginTop: '0.75rem', paddingTop: '0.75rem', borderTop: '1px solid #f1f5f9' }}>
+                              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(130px, 1fr))', gap: '0.75rem', marginBottom: '1rem' }}>
+                                <div style={{ background: '#f8fafc', padding: '0.5rem 0.75rem', borderRadius: '6px', border: '1px solid #e2e8f0' }}>
+                                  <div style={{ fontSize: '0.75rem', color: '#64748b' }}>Skills Match</div>
+                                  <div style={{ fontSize: '1rem', fontWeight: 600, color: '#0f172a' }}>{Math.round(item.match_score.skills_match_score)}%</div>
+                                </div>
+                                <div style={{ background: '#f8fafc', padding: '0.5rem 0.75rem', borderRadius: '6px', border: '1px solid #e2e8f0' }}>
+                                  <div style={{ fontSize: '0.75rem', color: '#64748b' }}>Experience</div>
+                                  <div style={{ fontSize: '1rem', fontWeight: 600, color: '#0f172a' }}>{Math.round(item.match_score.experience_match_score)}%</div>
+                                </div>
+                                <div style={{ background: '#f8fafc', padding: '0.5rem 0.75rem', borderRadius: '6px', border: '1px solid #e2e8f0' }}>
+                                  <div style={{ fontSize: '0.75rem', color: '#64748b' }}>Education</div>
+                                  <div style={{ fontSize: '1rem', fontWeight: 600, color: '#0f172a' }}>{Math.round(item.match_score.education_match_score)}%</div>
+                                </div>
+                                <div style={{ background: '#f8fafc', padding: '0.5rem 0.75rem', borderRadius: '6px', border: '1px solid #e2e8f0' }}>
+                                  <div style={{ fontSize: '0.75rem', color: '#64748b' }}>Projects/Domain</div>
+                                  <div style={{ fontSize: '1rem', fontWeight: 600, color: '#0f172a' }}>{Math.round(item.match_score.projects_match_score)}%</div>
+                                </div>
+                              </div>
+
+                              {item.match_score.matching_skills && item.match_score.matching_skills.length > 0 && (
+                                <div style={{ marginBottom: '0.5rem', fontSize: '0.825rem' }}>
+                                  <strong style={{ color: '#166534' }}>✓ Matching Skills: </strong>
+                                  <span style={{ color: '#334155' }}>{item.match_score.matching_skills.join(', ')}</span>
+                                </div>
+                              )}
+
+                              {item.match_score.missing_skills && item.match_score.missing_skills.length > 0 && (
+                                <div style={{ fontSize: '0.825rem' }}>
+                                  <strong style={{ color: '#b91c1c' }}>⚠ Recommended / Missing Skills: </strong>
+                                  <span style={{ color: '#64748b' }}>{item.match_score.missing_skills.join(', ')}</span>
+                                </div>
+                              )}
+                            </div>
+                          )}
+                        </div>
+                      ))}
                     </div>
                   )}
                 </div>
@@ -198,7 +259,7 @@ export default function CandidateDashboard({ user }) {
                   <div className="card-header">
                     <div>
                       <h2 className="card-title">Previous Interviews</h2>
-                      <p className="card-description">Past and completed interview history</p>
+                      <p className="card-description">Past interview records</p>
                     </div>
                   </div>
 
@@ -216,7 +277,7 @@ export default function CandidateDashboard({ user }) {
                             <th>Interview Title</th>
                             <th>Job Role</th>
                             <th>Interviewer</th>
-                            <th>Completed Date</th>
+                            <th>Date</th>
                             <th>Status</th>
                           </tr>
                         </thead>
@@ -246,8 +307,8 @@ export default function CandidateDashboard({ user }) {
                 <div className="card">
                   <div className="card-header">
                     <div>
-                      <h2 className="card-title">Upload Resume</h2>
-                      <p className="card-description">Upload your updated resume in PDF or DOCX format</p>
+                      <h2 className="card-title">Upload & Parse Resume</h2>
+                      <p className="card-description">Upload your resume in PDF or DOCX format for instant structured extraction</p>
                     </div>
                   </div>
 
@@ -273,7 +334,7 @@ export default function CandidateDashboard({ user }) {
                           {selectedFile ? selectedFile.name : 'Choose PDF or DOCX file to upload'}
                         </div>
                         <div style={{ fontSize: '0.8rem', color: '#94a3b8', marginTop: '0.25rem' }}>
-                          Supported file types: .pdf, .docx (Max 10MB)
+                          Automatic AI parsing: Skills, Education, Work Experience, Projects & Certifications
                         </div>
                       </label>
                     </div>
@@ -284,7 +345,7 @@ export default function CandidateDashboard({ user }) {
                         className="btn btn-primary"
                         disabled={!selectedFile || uploadingResume}
                       >
-                        {uploadingResume ? 'Uploading...' : 'Upload Resume File'}
+                        {uploadingResume ? 'Extracting & Parsing...' : 'Upload & Parse Resume'}
                       </button>
                     </div>
                   </form>
@@ -294,7 +355,7 @@ export default function CandidateDashboard({ user }) {
                   <div className="card-header">
                     <div>
                       <h2 className="card-title">Uploaded Resumes & Status</h2>
-                      <p className="card-description">Files stored securely on the platform</p>
+                      <p className="card-description">Files stored securely and processed for matching</p>
                     </div>
                   </div>
 
@@ -312,7 +373,8 @@ export default function CandidateDashboard({ user }) {
                             <th>Format</th>
                             <th>Size</th>
                             <th>Upload Date</th>
-                            <th>Status</th>
+                            <th>Parsing Status</th>
+                            <th>Action</th>
                           </tr>
                         </thead>
                         <tbody>
@@ -325,6 +387,14 @@ export default function CandidateDashboard({ user }) {
                               <td>
                                 <span className="badge badge-uploaded">{r.upload_status}</span>
                               </td>
+                              <td>
+                                <button
+                                  className="btn btn-secondary btn-sm"
+                                  onClick={() => setActiveTab('parsed-view')}
+                                >
+                                  View Parsed Data
+                                </button>
+                              </td>
                             </tr>
                           ))}
                         </tbody>
@@ -335,7 +405,124 @@ export default function CandidateDashboard({ user }) {
               </div>
             )}
 
-            {/* TAB 3: CANDIDATE PROFILE */}
+            {/* TAB 3: PARSED RESUME VIEW */}
+            {activeTab === 'parsed-view' && (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '1.5rem' }}>
+                <div className="card">
+                  <div className="card-header">
+                    <div>
+                      <h2 className="card-title">Parsed Resume Structured View</h2>
+                      <p className="card-description">
+                        Extracted components from {latestResume?.original_filename || 'your resume'}
+                      </p>
+                    </div>
+                    <button
+                      className="btn btn-secondary btn-sm"
+                      onClick={() => setActiveTab('resumes')}
+                    >
+                      Upload Another
+                    </button>
+                  </div>
+
+                  {!parsedData ? (
+                    <div className="empty-state">
+                      <span style={{ fontSize: '2rem' }}>🤖</span>
+                      <div className="empty-state-title">No parsed data available</div>
+                      <div className="empty-state-desc">Upload a resume in the "Resume Upload" tab to view extracted information.</div>
+                    </div>
+                  ) : (
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '1.5rem' }}>
+                      {/* Skills & Tech */}
+                      <div>
+                        <h4 style={{ fontSize: '0.95rem', fontWeight: 600, marginBottom: '0.5rem', color: '#0f172a' }}>
+                          Extracted Skills & Technologies ({parsedData.skills?.length || 0})
+                        </h4>
+                        <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.4rem' }}>
+                          {parsedData.skills?.map((s, idx) => (
+                            <span key={idx} style={{ background: '#eff6ff', color: '#1e40af', padding: '3px 10px', borderRadius: '12px', fontSize: '0.8rem', fontWeight: 500, border: '1px solid #dbeafe' }}>
+                              {s}
+                            </span>
+                          ))}
+                        </div>
+                      </div>
+
+                      {/* Work Experience */}
+                      <div>
+                        <h4 style={{ fontSize: '0.95rem', fontWeight: 600, marginBottom: '0.5rem', color: '#0f172a' }}>
+                          Work Experience ({parsedData.work_experience?.estimated_years || 0} Years Estimated)
+                        </h4>
+                        <ul style={{ listStyle: 'none', display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+                          {parsedData.work_experience?.roles_and_companies?.length > 0 ? (
+                            parsedData.work_experience.roles_and_companies.map((exp, idx) => (
+                              <li key={idx} style={{ background: '#f8fafc', padding: '0.65rem 0.85rem', borderRadius: '6px', border: '1px solid #e2e8f0', fontSize: '0.85rem' }}>
+                                💼 {exp}
+                              </li>
+                            ))
+                          ) : (
+                            <li style={{ color: '#64748b', fontSize: '0.85rem' }}>Experience details detected from summary profile.</li>
+                          )}
+                        </ul>
+                      </div>
+
+                      {/* Education */}
+                      <div>
+                        <h4 style={{ fontSize: '0.95rem', fontWeight: 600, marginBottom: '0.5rem', color: '#0f172a' }}>
+                          Education & Degrees
+                        </h4>
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+                          {parsedData.education?.length > 0 ? (
+                            parsedData.education.map((edu, idx) => (
+                              <div key={idx} style={{ background: '#f8fafc', padding: '0.65rem 0.85rem', borderRadius: '6px', border: '1px solid #e2e8f0', fontSize: '0.85rem' }}>
+                                🎓 <strong>{edu.degree}</strong> {edu.raw_context && `— ${edu.raw_context}`}
+                              </div>
+                            ))
+                          ) : (
+                            <div style={{ color: '#64748b', fontSize: '0.85rem' }}>Undergraduate / Bachelor level qualification.</div>
+                          )}
+                        </div>
+                      </div>
+
+                      {/* Projects */}
+                      <div>
+                        <h4 style={{ fontSize: '0.95rem', fontWeight: 600, marginBottom: '0.5rem', color: '#0f172a' }}>
+                          Projects & Domain Highlights
+                        </h4>
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+                          {parsedData.projects?.length > 0 ? (
+                            parsedData.projects.map((proj, idx) => (
+                              <div key={idx} style={{ background: '#f8fafc', padding: '0.65rem 0.85rem', borderRadius: '6px', border: '1px solid #e2e8f0', fontSize: '0.85rem' }}>
+                                🚀 <strong>{proj.title}</strong>
+                                <p style={{ fontSize: '0.8rem', color: '#475569', marginTop: '0.2rem' }}>{proj.description}</p>
+                              </div>
+                            ))
+                          ) : (
+                            <div style={{ color: '#64748b', fontSize: '0.85rem' }}>General technical engineering and full-stack projects.</div>
+                          )}
+                        </div>
+                      </div>
+
+                      {/* Certifications */}
+                      {parsedData.certifications && parsedData.certifications.length > 0 && (
+                        <div>
+                          <h4 style={{ fontSize: '0.95rem', fontWeight: 600, marginBottom: '0.5rem', color: '#0f172a' }}>
+                            Certifications
+                          </h4>
+                          <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.5rem' }}>
+                            {parsedData.certifications.map((cert, idx) => (
+                              <span key={idx} style={{ background: '#f0fdf4', color: '#166534', padding: '4px 10px', borderRadius: '6px', fontSize: '0.8rem', border: '1px solid #bbf7d0' }}>
+                                📜 {cert}
+                              </span>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
+
+            {/* TAB 4: CANDIDATE PROFILE */}
             {activeTab === 'profile' && (
               <div className="card" style={{ maxWidth: '750px' }}>
                 <div className="card-header">

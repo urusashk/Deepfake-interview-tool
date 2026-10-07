@@ -76,7 +76,10 @@ export const api = {
   getCandidateInterviews: () => apiRequest('/candidate/interviews'),
 
   // Interviewer
-  getCandidates: () => apiRequest('/interviewer/candidates'),
+  getCandidates: (jobDescriptionId) => {
+    const query = jobDescriptionId ? `?job_description_id=${jobDescriptionId}` : '';
+    return apiRequest(`/interviewer/candidates${query}`);
+  },
   getJobDescriptions: () => apiRequest('/interviewer/job-descriptions'),
   createJobDescription: (payload) => apiRequest('/interviewer/job-descriptions', {
     method: 'POST',

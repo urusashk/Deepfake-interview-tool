@@ -1,8 +1,9 @@
 import os
 import uuid
+import json
 import aiofiles
 from datetime import datetime
-from typing import List
+from typing import List, Optional
 from fastapi import FastAPI, Depends, HTTPException, status, UploadFile, File, Form
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import Session
@@ -11,7 +12,8 @@ from sqlalchemy import desc
 from app.database import engine, get_db, SessionLocal
 from app.models import (
     Base, User, CandidateProfile, Resume, JobDescription,
-    Interview, InterviewQuestion, InterviewResult, UserRole, InterviewStatus
+    ResumeJobMatch, Interview, InterviewQuestion, InterviewResult,
+    UserRole, InterviewStatus
 )
 from app.auth import (
     get_password_hash, verify_password, create_access_token,
@@ -21,8 +23,11 @@ from app.schemas import (
     UserRegisterRequest, UserLoginRequest, TokenResponse, UserResponse,
     CandidateProfileUpdate, CandidateProfileResponse, ResumeResponse,
     JobDescriptionCreate, JobDescriptionResponse,
-    InterviewCreate, InterviewResponse
+    InterviewCreate, InterviewResponse, MatchBreakdownResponse, CandidateMatchDetail
 )
+from app.ai.resume_parser import parse_resume_document
+from app.ai.jd_analyzer import analyze_job_description
+from app.ai.matcher import match_resume_to_jd
 
 # Initialize database schema
 Base.metadata.create_all(bind=engine)
@@ -32,9 +37,9 @@ UPLOAD_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "uplo
 os.makedirs(UPLOAD_DIR, exist_ok=True)
 
 app = FastAPI(
-    title="AI Interview Platform - Phase 1 Backend",
-    description="Core backend for authentication, profiles, resume management, job descriptions, and interview scheduling.",
-    version="1.0.0"
+    title="AI Interview Platform - Phase 2",
+    description="Resume parsing, job description analysis, and semantic resume-JD matching engine.",
+    version="2.0.0"
 )
 
 # Enable CORS for frontend
@@ -46,7 +51,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# ----------------- SEED DATA HELPER -----------------
+# ----------------- SEED DATA HELPER (PHASE 2 READY) -----------------
 def init_seed_data():
     db = SessionLocal()
     try:
@@ -77,26 +82,86 @@ def init_seed_data():
                 user_id=candidate.id,
                 phone="+1 (555) 349-8821",
                 headline="Senior Full-Stack & Python Engineer",
-                skills="Python, FastAPI, React, TypeScript, PostgreSQL, Docker, AWS",
+                skills="Python, FastAPI, React, TypeScript, PostgreSQL, Docker, AWS, Scikit-Learn",
                 experience_years=4.5
             )
             db.add(profile)
             db.commit()
             db.refresh(profile)
 
-            # Create sample Job Description
+            # Create sample Job Description with structured parsed_data
+            jd_text = "We are seeking a talented Senior AI Systems Engineer to build robust pipelines, REST APIs, and microservices for our core platform."
+            jd_reqs = "Requirements: 4+ years Python, FastAPI/Django, PostgreSQL, Docker, AWS, REST API design, Machine Learning concepts. Preferred: TypeScript, Redis."
+            jd_parsed = analyze_job_description("Senior AI Systems Engineer", jd_text, jd_reqs)
+
             jd = JobDescription(
                 title="Senior AI Systems Engineer",
                 role_category="Software Engineering",
-                description_text="We are seeking an experienced Systems Engineer to build robust pipelines and core API microservices.",
-                requirements="3+ years Python/FastAPI, Distributed Systems, SQL, Clean Architecture principles.",
+                description_text=jd_text,
+                requirements=jd_reqs,
+                parsed_data=json.dumps(jd_parsed),
                 created_by=interviewer.id
             )
             db.add(jd)
             db.commit()
             db.refresh(jd)
 
-            # Create sample interviews
+            # Create sample mock resume
+            resume_parsed_mock = {
+                "skills": ["Python", "FastAPI", "React", "TypeScript", "PostgreSQL", "Docker", "AWS", "Git", "REST API", "SQL", "Scikit-Learn"],
+                "technologies": ["FastAPI", "React", "PostgreSQL", "Docker", "AWS"],
+                "education": [{"degree": "Bachelor of Science in Computer Science", "raw_context": "B.S. Computer Science, University of California"}],
+                "work_experience": {
+                    "estimated_years": 4.5,
+                    "roles_and_companies": [
+                        "Senior Software Engineer at Nexus Tech (2022 - Present) - FastAPI & Microservices",
+                        "Full Stack Developer at CloudWave (2020 - 2022) - Python, React, PostgreSQL"
+                    ]
+                },
+                "projects": [
+                    {"title": "High-Throughput ML Inference Gateway", "description": "Built asynchronous FastAPI gateway handling 10k req/sec with Docker and Redis."},
+                    {"title": "Automated Candidate Evaluation Platform", "description": "Designed full-stack analytics pipeline in React and Python."}
+                ],
+                "certifications": ["AWS Certified Solutions Architect - Associate"],
+                "summary": "Experienced Python and Cloud Systems Engineer with 4.5+ years building scalable microservices and APIs."
+            }
+
+            dummy_resume_path = os.path.join(UPLOAD_DIR, "demo_alex_chen_resume.pdf")
+            with open(dummy_resume_path, "w", encoding="utf-8") as f:
+                f.write("Demo Resume: Alex Chen - Senior Full-Stack & Python Engineer\nSkills: Python, FastAPI, React, TypeScript, PostgreSQL, Docker, AWS, Scikit-Learn\nExperience: 4.5 Years\nEducation: B.S. in Computer Science\n")
+
+            resume = Resume(
+                candidate_profile_id=profile.id,
+                original_filename="alex_chen_resume.pdf",
+                stored_filename="demo_alex_chen_resume.pdf",
+                file_path=dummy_resume_path,
+                file_size_bytes=45200,
+                file_type="pdf",
+                upload_status="Parsed",
+                raw_text="Demo Resume: Alex Chen - Senior Full-Stack & Python Engineer\nSkills: Python, FastAPI, React, TypeScript, PostgreSQL, Docker, AWS, Scikit-Learn\nExperience: 4.5 Years\nEducation: B.S. in Computer Science\n",
+                parsed_data=json.dumps(resume_parsed_mock)
+            )
+            db.add(resume)
+            db.commit()
+            db.refresh(resume)
+
+            # Compute initial semantic match
+            match_data = match_resume_to_jd(resume_parsed_mock, jd_parsed, resume.raw_text, f"{jd.description_text} {jd.requirements}")
+            resume_match = ResumeJobMatch(
+                resume_id=resume.id,
+                job_description_id=jd.id,
+                overall_match_score=match_data["overall_match_score"],
+                skills_match_score=match_data["skills_match_score"],
+                experience_match_score=match_data["experience_match_score"],
+                education_match_score=match_data["education_match_score"],
+                projects_match_score=match_data["projects_match_score"],
+                matching_skills=json.dumps(match_data["matching_skills"]),
+                missing_skills=json.dumps(match_data["missing_skills"]),
+                ai_summary=match_data["ai_summary"]
+            )
+            db.add(resume_match)
+
+            # Create sample interview linked to JD
             interview1 = Interview(
                 title="Technical Architecture Round",
                 job_role="Senior AI Systems Engineer",
@@ -113,6 +178,91 @@ def init_seed_data():
         db.close()
 
 init_seed_data()
+
+# ----------------- HELPER: COMPUTE OR GET RESUME-JD MATCH -----------------
+
+def get_or_calculate_match(db: Session, resume: Resume, jd: JobDescription) -> Optional[ResumeJobMatch]:
+    if not resume or not jd:
+        return None
+    
+    # Check if match already computed
+    match_record = db.query(ResumeJobMatch).filter(
+        ResumeJobMatch.resume_id == resume.id,
+        ResumeJobMatch.job_description_id == jd.id
+    ).first()
+
+    if match_record:
+        return match_record
+
+    # Parse resume if needed
+    resume_parsed = json.loads(resume.parsed_data) if resume.parsed_data else None
+    if not resume_parsed:
+        parse_res = parse_resume_document(resume.file_path, resume.file_type)
+        resume.raw_text = parse_res["raw_text"]
+        resume.parsed_data = json.dumps(parse_res["parsed_data"])
+        resume.upload_status = "Parsed"
+        db.commit()
+        db.refresh(resume)
+        resume_parsed = parse_res["parsed_data"]
+
+    # Parse JD if needed
+    jd_parsed = json.loads(jd.parsed_data) if jd.parsed_data else None
+    if not jd_parsed:
+        jd_parsed = analyze_job_description(jd.title, jd.description_text, jd.requirements or "")
+        jd.parsed_data = json.dumps(jd_parsed)
+        db.commit()
+        db.refresh(jd)
+
+    # Perform AI semantic matching
+    match_result = match_resume_to_jd(
+        resume_parsed,
+        jd_parsed,
+        resume.raw_text or "",
+        f"{jd.description_text} {jd.requirements or ''}"
+    )
+
+    new_match = ResumeJobMatch(
+        resume_id=resume.id,
+        job_description_id=jd.id,
+        overall_match_score=match_result["overall_match_score"],
+        skills_match_score=match_result["skills_match_score"],
+        experience_match_score=match_result["experience_match_score"],
+        education_match_score=match_result["education_match_score"],
+        projects_match_score=match_result["projects_match_score"],
+        matching_skills=json.dumps(match_result["matching_skills"]),
+        missing_skills=json.dumps(match_result["missing_skills"]),
+        ai_summary=match_result["ai_summary"]
+    )
+    db.add(new_match)
+    db.commit()
+    db.refresh(new_match)
+    return new_match
+
+def format_match_response(match: ResumeJobMatch, jd_title: Optional[str] = None) -> MatchBreakdownResponse:
+    return MatchBreakdownResponse(
+        id=match.id,
+        overall_match_score=match.overall_match_score,
+        skills_match_score=match.skills_match_score,
+        experience_match_score=match.experience_match_score,
+        education_match_score=match.education_match_score,
+        projects_match_score=match.projects_match_score,
+        matching_skills=json.loads(match.matching_skills) if match.matching_skills else [],
+        missing_skills=json.loads(match.missing_skills) if match.missing_skills else [],
+        ai_summary=match.ai_summary,
+        job_description_title=jd_title
+    )
+
+def format_resume_response(r: Resume) -> ResumeResponse:
+    parsed_json = json.loads(r.parsed_data) if r.parsed_data else None
+    return ResumeResponse(
+        id=r.id,
+        original_filename=r.original_filename,
+        file_size_bytes=r.file_size_bytes,
+        file_type=r.file_type,
+        upload_status=r.upload_status,
+        parsed_data=parsed_json,
+        uploaded_at=r.uploaded_at
+    )
 
 # ----------------- AUTH ROUTING -----------------
 
@@ -184,7 +334,17 @@ def get_candidate_profile(
         db.add(profile)
         db.commit()
         db.refresh(profile)
-    return profile
+    
+    resumes_formatted = [format_resume_response(r) for r in profile.resumes]
+    return CandidateProfileResponse(
+        id=profile.id,
+        user_id=profile.user_id,
+        phone=profile.phone,
+        headline=profile.headline,
+        skills=profile.skills,
+        experience_years=profile.experience_years,
+        resumes=resumes_formatted
+    )
 
 @app.put("/api/candidate/profile", response_model=CandidateProfileResponse)
 def update_candidate_profile(
@@ -208,7 +368,17 @@ def update_candidate_profile(
     
     db.commit()
     db.refresh(profile)
-    return profile
+    
+    resumes_formatted = [format_resume_response(r) for r in profile.resumes]
+    return CandidateProfileResponse(
+        id=profile.id,
+        user_id=profile.user_id,
+        phone=profile.phone,
+        headline=profile.headline,
+        skills=profile.skills,
+        experience_years=profile.experience_years,
+        resumes=resumes_formatted
+    )
 
 @app.post("/api/candidate/resume/upload", response_model=ResumeResponse)
 async def upload_resume(
@@ -241,7 +411,15 @@ async def upload_resume(
             file_size += len(content)
             await out_file.write(content)
 
-    # Save metadata to DB
+    # Phase 2: Execute Resume Extraction
+    parse_result = parse_resume_document(file_path, file_ext, profile.headline or "")
+    
+    # Also auto-update candidate skills and experience if blank
+    if not profile.skills and parse_result["parsed_data"].get("skills"):
+        profile.skills = ", ".join(parse_result["parsed_data"]["skills"])
+    if profile.experience_years == 0 and parse_result["parsed_data"].get("work_experience", {}).get("estimated_years"):
+        profile.experience_years = parse_result["parsed_data"]["work_experience"]["estimated_years"]
+
     resume = Resume(
         candidate_profile_id=profile.id,
         original_filename=file.filename,
@@ -249,14 +427,21 @@ async def upload_resume(
         file_path=file_path,
         file_size_bytes=file_size,
         file_type=file_ext,
-        upload_status="Uploaded",
+        upload_status="Parsed",
+        raw_text=parse_result["raw_text"],
+        parsed_data=json.dumps(parse_result["parsed_data"]),
         uploaded_at=datetime.utcnow()
     )
     db.add(resume)
     db.commit()
     db.refresh(resume)
 
-    return resume
+    # Trigger auto-matching for any existing job descriptions
+    all_jds = db.query(JobDescription).all()
+    for jd in all_jds:
+        get_or_calculate_match(db, resume, jd)
+
+    return format_resume_response(resume)
 
 @app.get("/api/candidate/interviews", response_model=List[InterviewResponse])
 def get_candidate_interviews(
@@ -270,8 +455,20 @@ def get_candidate_interviews(
         .all()
     )
     
+    # Get candidate latest resume for match calculation
+    profile = db.query(CandidateProfile).filter(CandidateProfile.user_id == current_user.id).first()
+    latest_resume = None
+    if profile and profile.resumes:
+        latest_resume = sorted(profile.resumes, key=lambda r: r.uploaded_at, reverse=True)[0]
+
     results = []
     for it in interviews:
+        match_data = None
+        if latest_resume and it.job_description:
+            match_obj = get_or_calculate_match(db, latest_resume, it.job_description)
+            if match_obj:
+                match_data = format_match_response(match_obj, it.job_description.title)
+
         results.append(
             InterviewResponse(
                 id=it.id,
@@ -287,27 +484,77 @@ def get_candidate_interviews(
                 scheduled_time=it.scheduled_time,
                 status=it.status.value,
                 notes=it.notes,
-                created_at=it.created_at
+                created_at=it.created_at,
+                match_score=match_data
             )
         )
     return results
 
 # ----------------- INTERVIEWER ENDPOINTS -----------------
 
-@app.get("/api/interviewer/candidates", response_model=List[UserResponse])
-def get_all_candidates(
+@app.get("/api/interviewer/candidates", response_model=List[CandidateMatchDetail])
+def get_all_candidates_with_matches(
+    job_description_id: Optional[int] = None,
     current_user: User = Depends(require_interviewer),
     db: Session = Depends(get_db)
 ):
     candidates = db.query(User).filter(User.role == UserRole.CANDIDATE).all()
-    return candidates
+    
+    # Target JD for matching context
+    target_jd = None
+    if job_description_id:
+        target_jd = db.query(JobDescription).filter(JobDescription.id == job_description_id).first()
+    if not target_jd:
+        target_jd = db.query(JobDescription).order_by(desc(JobDescription.created_at)).first()
+
+    results = []
+    for cand in candidates:
+        profile = cand.candidate_profile
+        latest_resume = None
+        match_resp = None
+
+        if profile and profile.resumes:
+            latest_resume = sorted(profile.resumes, key=lambda r: r.uploaded_at, reverse=True)[0]
+            if target_jd and latest_resume:
+                match_obj = get_or_calculate_match(db, latest_resume, target_jd)
+                if match_obj:
+                    match_resp = format_match_response(match_obj, target_jd.title)
+
+        results.append(
+            CandidateMatchDetail(
+                id=cand.id,
+                full_name=cand.full_name,
+                email=cand.email,
+                created_at=cand.created_at,
+                phone=profile.phone if profile else None,
+                headline=profile.headline if profile else None,
+                skills=profile.skills if profile else None,
+                experience_years=profile.experience_years if profile else 0.0,
+                latest_resume=format_resume_response(latest_resume) if latest_resume else None,
+                match_score=match_resp
+            )
+        )
+    return results
 
 @app.get("/api/interviewer/job-descriptions", response_model=List[JobDescriptionResponse])
 def get_job_descriptions(
     current_user: User = Depends(require_interviewer),
     db: Session = Depends(get_db)
 ):
-    return db.query(JobDescription).order_by(desc(JobDescription.created_at)).all()
+    jds = db.query(JobDescription).order_by(desc(JobDescription.created_at)).all()
+    return [
+        JobDescriptionResponse(
+            id=j.id,
+            title=j.title,
+            role_category=j.role_category,
+            description_text=j.description_text,
+            requirements=j.requirements,
+            parsed_data=json.loads(j.parsed_data) if j.parsed_data else None,
+            created_by=j.created_by,
+            created_at=j.created_at
+        )
+        for j in jds
+    ]
 
 @app.post("/api/interviewer/job-descriptions", response_model=JobDescriptionResponse)
 def create_job_description(
@@ -315,17 +562,36 @@ def create_job_description(
     current_user: User = Depends(require_interviewer),
     db: Session = Depends(get_db)
 ):
+    # Phase 2: Analyze JD content structured extraction
+    parsed_info = analyze_job_description(jd_in.title, jd_in.description_text, jd_in.requirements or "")
+
     new_jd = JobDescription(
         title=jd_in.title,
         role_category=jd_in.role_category,
         description_text=jd_in.description_text,
         requirements=jd_in.requirements,
+        parsed_data=json.dumps(parsed_info),
         created_by=current_user.id
     )
     db.add(new_jd)
     db.commit()
     db.refresh(new_jd)
-    return new_jd
+
+    # Auto compute matches with existing uploaded resumes
+    all_resumes = db.query(Resume).all()
+    for resume in all_resumes:
+        get_or_calculate_match(db, resume, new_jd)
+
+    return JobDescriptionResponse(
+        id=new_jd.id,
+        title=new_jd.title,
+        role_category=new_jd.role_category,
+        description_text=new_jd.description_text,
+        requirements=new_jd.requirements,
+        parsed_data=parsed_info,
+        created_by=new_jd.created_by,
+        created_at=new_jd.created_at
+    )
 
 @app.post("/api/interviewer/interviews", response_model=InterviewResponse)
 def create_interview(
@@ -333,7 +599,6 @@ def create_interview(
     current_user: User = Depends(require_interviewer),
     db: Session = Depends(get_db)
 ):
-    # Verify candidate exists
     candidate = db.query(User).filter(User.id == interview_in.candidate_id, User.role == UserRole.CANDIDATE).first()
     if not candidate:
         raise HTTPException(status_code=404, detail="Candidate not found")
@@ -352,6 +617,14 @@ def create_interview(
     db.commit()
     db.refresh(new_interview)
 
+    # Compute match if candidate has a resume
+    match_data = None
+    if candidate.candidate_profile and candidate.candidate_profile.resumes and new_interview.job_description:
+        latest_resume = sorted(candidate.candidate_profile.resumes, key=lambda r: r.uploaded_at, reverse=True)[0]
+        match_obj = get_or_calculate_match(db, latest_resume, new_interview.job_description)
+        if match_obj:
+            match_data = format_match_response(match_obj, new_interview.job_description.title)
+
     return InterviewResponse(
         id=new_interview.id,
         title=new_interview.title,
@@ -366,7 +639,8 @@ def create_interview(
         scheduled_time=new_interview.scheduled_time,
         status=new_interview.status.value,
         notes=new_interview.notes,
-        created_at=new_interview.created_at
+        created_at=new_interview.created_at,
+        match_score=match_data
     )
 
 @app.get("/api/interviewer/interviews", response_model=List[InterviewResponse])
@@ -383,6 +657,13 @@ def get_interviewer_interviews(
     
     results = []
     for it in interviews:
+        match_data = None
+        if it.candidate and it.candidate.candidate_profile and it.candidate.candidate_profile.resumes and it.job_description:
+            latest_resume = sorted(it.candidate.candidate_profile.resumes, key=lambda r: r.uploaded_at, reverse=True)[0]
+            match_obj = get_or_calculate_match(db, latest_resume, it.job_description)
+            if match_obj:
+                match_data = format_match_response(match_obj, it.job_description.title)
+
         results.append(
             InterviewResponse(
                 id=it.id,
@@ -398,11 +679,12 @@ def get_interviewer_interviews(
                 scheduled_time=it.scheduled_time,
                 status=it.status.value,
                 notes=it.notes,
-                created_at=it.created_at
+                created_at=it.created_at,
+                match_score=match_data
             )
         )
     return results
 
 @app.get("/api/health")
 def health_check():
-    return {"status": "ok", "phase": "Phase 1 - Foundation"}
+    return {"status": "ok", "phase": "Phase 2 - AI Resume & JD Matcher"}

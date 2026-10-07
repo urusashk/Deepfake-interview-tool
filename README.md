@@ -1,45 +1,50 @@
-# AI Interview Platform — Phase 1 Foundation
+# AI Interview Platform — Phase 2: AI Resume Analysis & Matching
 
-A clean, modern, and minimal foundation for an AI-powered interview platform built with **FastAPI**, **SQLite/SQLAlchemy**, and **React (Vite)**.
-
----
-
-## 🏗 System Architecture & Database Schema
-
-The database models in [models.py](file:///c:/Users/URUSA%20SHAIKH/ai%20project/Deepfake-interview-tool/backend/app/models.py) are designed to support Phase 1 operations while laying the schema ground for upcoming AI evaluation phases:
-
-1. **`users`**: Email, password hash (bcrypt), full name, and role (`candidate` | `interviewer`).
-2. **`candidate_profiles`**: Linked to User with phone, professional headline, skills, experience years.
-3. **`resumes`**: File storage metadata, original filename, unique stored filename, file size, file type (PDF/DOCX), and status (`Uploaded`).
-4. **`job_descriptions`**: Title, role category, description overview, requirements, author reference.
-5. **`interviews`**: Title, job role, interviewer ID, candidate ID, job description ID, scheduled timestamp, status (`scheduled`, `completed`, `cancelled`), and notes.
-6. **`interview_questions`** *(Future-ready)*: Order index, category, question text.
-7. **`interview_results`** *(Future-ready)*: Overall score, feedback summary, deepfake flags count, behavior metrics payload.
+A clean, modern, and minimal platform for AI-powered interview management and candidate evaluation built with **FastAPI**, **SQLAlchemy**, and **React (Vite)**.
 
 ---
 
-## 🚀 Getting Started
+## 🚀 Phase 2 Features Implemented
 
-### 1. Backend Setup (FastAPI)
+### 1. Resume Parsing ([resume_parser.py](file:///c:/Users/URUSA%20SHAIKH/ai%20project/Deepfake-interview-tool/backend/app/ai/resume_parser.py))
+- **File Extraction**: Extracts raw text from PDF and DOCX uploads using `pypdf` and `python-docx`.
+- **Entity Extraction**:
+  - Skills & Technologies taxonomy identification
+  - Education degrees and context
+  - Work experience roles, companies, and estimated years
+  - Key projects and domain highlights
+  - Certifications
+- **Structured Storage**: Saved in `Resume.raw_text` and `Resume.parsed_data` (JSON) in the database.
+- **Candidate View**: Dedicated "Parsed Resume View" tab on the Candidate Dashboard.
 
-```bash
-cd backend
-python -m pip install -r requirements.txt
-python -m uvicorn app.main:app --reload --port 8000
-```
+### 2. Job Description Analysis ([jd_analyzer.py](file:///c:/Users/URUSA%20SHAIKH/ai%20project/Deepfake-interview-tool/backend/app/ai/jd_analyzer.py))
+- Automatically extracts:
+  - Required Skills
+  - Preferred Skills
+  - Experience Requirements
+  - Education Requirements
+  - Core Responsibilities & Technologies
+- Stored in `JobDescription.parsed_data` for matching against candidate pools.
 
-- API Documentation: [http://127.0.0.1:8000/docs](http://127.0.0.1:8000/docs)
-- Interactive Open API: [http://127.0.0.1:8000/redoc](http://127.0.0.1:8000/redoc)
+### 3. Semantic Resume–JD Matching ([matcher.py](file:///c:/Users/URUSA%20SHAIKH/ai%20project/Deepfake-interview-tool/backend/app/ai/matcher.py))
+- Evaluates candidates against JDs across multiple dimensions:
+  - **Overall Match Score (%)**
+  - **Skills Match (%)**
+  - **Experience Match (%)**
+  - **Education Match (%)**
+  - **Project/Domain Semantic Match (%)** using TF-IDF n-gram cosine similarity
+  - **Matching Skills List**
+  - **Missing / Required Skills List**
+  - **AI Candidate Suitability Summary**
 
-### 2. Frontend Setup (React / Vite)
-
-```bash
-cd frontend
-npm install
-npm run dev
-```
-
-- Web App: [http://localhost:5173](http://localhost:5173)
+### 4. Dashboards
+- **Interviewer Dashboard**:
+  - Interactive "Candidates & AI Match" tab displaying score breakdowns, matched/missing skill pills, and AI candidate summaries.
+  - Ability to switch target Job Descriptions for comparison.
+  - Scheduled interviews table displaying live match scores.
+- **Candidate Dashboard**:
+  - Displays match scores and breakdown for each assigned interview/job.
+  - Interactive parsed resume inspector.
 
 ---
 

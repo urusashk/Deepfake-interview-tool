@@ -55,10 +55,15 @@ class Resume(Base):
     file_path = Column(String(500), nullable=False)
     file_size_bytes = Column(Integer, nullable=False)
     file_type = Column(String(50), nullable=False) # pdf, docx
-    upload_status = Column(String(50), default="Uploaded") # Uploaded, Verified, etc.
+    upload_status = Column(String(50), default="Uploaded") # Uploaded, Parsed, Error
+    
+    # Phase 2: Extracted Resume Content and Structured Data (JSON)
+    raw_text = Column(Text, nullable=True)
+    parsed_data = Column(Text, nullable=True) # JSON: skills, education, work_experience, projects, certifications, technologies
     uploaded_at = Column(DateTime, default=datetime.utcnow)
 
     candidate_profile = relationship("CandidateProfile", back_populates="resumes")
+    match_scores = relationship("ResumeJobMatch", back_populates="resume", cascade="all, delete-orphan")
 
 class JobDescription(Base):
     __tablename__ = "job_descriptions"
@@ -68,11 +73,40 @@ class JobDescription(Base):
     role_category = Column(String(100), nullable=False) # e.g. Frontend Engineer, ML Engineer
     description_text = Column(Text, nullable=False)
     requirements = Column(Text, nullable=True)
+    
+    # Phase 2: Structured Job Analysis Data (JSON)
+    parsed_data = Column(Text, nullable=True) # JSON: required_skills, preferred_skills, experience_reqs, education_reqs, responsibilities, technologies
+    
     created_by = Column(Integer, ForeignKey("users.id"), nullable=False)
     created_at = Column(DateTime, default=datetime.utcnow)
 
     created_by_user = relationship("User", back_populates="job_descriptions")
     interviews = relationship("Interview", back_populates="job_description")
+    match_scores = relationship("ResumeJobMatch", back_populates="job_description", cascade="all, delete-orphan")
+
+class ResumeJobMatch(Base):
+    """Phase 2: Semantic AI Match between a candidate's resume and a job description"""
+    __tablename__ = "resume_job_matches"
+
+    id = Column(Integer, primary_key=True, index=True)
+    resume_id = Column(Integer, ForeignKey("resumes.id", ondelete="CASCADE"), nullable=False)
+    job_description_id = Column(Integer, ForeignKey("job_descriptions.id", ondelete="CASCADE"), nullable=False)
+    
+    overall_match_score = Column(Float, nullable=False) # 0 to 100
+    skills_match_score = Column(Float, nullable=False) # 0 to 100
+    experience_match_score = Column(Float, nullable=False) # 0 to 100
+    education_match_score = Column(Float, nullable=False) # 0 to 100
+    projects_match_score = Column(Float, nullable=False) # 0 to 100
+    
+    matching_skills = Column(Text, nullable=True) # JSON array of matching skills
+    missing_skills = Column(Text, nullable=True) # JSON array of missing required skills
+    ai_summary = Column(Text, nullable=True) # Short AI-generated candidate suitability summary
+    
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    resume = relationship("Resume", back_populates="match_scores")
+    job_description = relationship("JobDescription", back_populates="match_scores")
 
 class Interview(Base):
     __tablename__ = "interviews"

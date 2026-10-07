@@ -1,5 +1,5 @@
 from pydantic import BaseModel, EmailStr
-from typing import Optional, List
+from typing import Optional, List, Any, Dict
 from datetime import datetime
 from app.models import UserRole, InterviewStatus
 
@@ -32,7 +32,20 @@ class UserResponse(BaseModel):
     class Config:
         from_attributes = True
 
-# Profile Schemas
+# Match Breakdown Schemas
+class MatchBreakdownResponse(BaseModel):
+    id: Optional[int] = None
+    overall_match_score: float
+    skills_match_score: float
+    experience_match_score: float
+    education_match_score: float
+    projects_match_score: float
+    matching_skills: List[str] = []
+    missing_skills: List[str] = []
+    ai_summary: Optional[str] = None
+    job_description_title: Optional[str] = None
+
+# Profile & Resume Schemas
 class CandidateProfileUpdate(BaseModel):
     phone: Optional[str] = None
     headline: Optional[str] = None
@@ -45,6 +58,7 @@ class ResumeResponse(BaseModel):
     file_size_bytes: int
     file_type: str
     upload_status: str
+    parsed_data: Optional[Dict[str, Any]] = None
     uploaded_at: datetime
 
     class Config:
@@ -62,6 +76,19 @@ class CandidateProfileResponse(BaseModel):
     class Config:
         from_attributes = True
 
+# Candidate with Match for Interviewer View
+class CandidateMatchDetail(BaseModel):
+    id: int
+    full_name: str
+    email: str
+    created_at: datetime
+    phone: Optional[str] = None
+    headline: Optional[str] = None
+    skills: Optional[str] = None
+    experience_years: float = 0.0
+    latest_resume: Optional[ResumeResponse] = None
+    match_score: Optional[MatchBreakdownResponse] = None
+
 # Job Description Schemas
 class JobDescriptionCreate(BaseModel):
     title: str
@@ -75,6 +102,7 @@ class JobDescriptionResponse(BaseModel):
     role_category: str
     description_text: str
     requirements: Optional[str]
+    parsed_data: Optional[Dict[str, Any]] = None
     created_by: int
     created_at: datetime
 
@@ -105,6 +133,7 @@ class InterviewResponse(BaseModel):
     status: str
     notes: Optional[str]
     created_at: datetime
+    match_score: Optional[MatchBreakdownResponse] = None
 
     class Config:
         from_attributes = True
