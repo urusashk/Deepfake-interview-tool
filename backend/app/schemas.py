@@ -190,6 +190,55 @@ class InterviewSessionUpdateRequest(BaseModel):
 class RecordingConsentRequest(BaseModel):
     consent: bool
 
+# Phase 5 Analysis Schemas
+class QuestionAnswerEvaluation(BaseModel):
+    question_id: int
+    question_text: str
+    category: str
+    difficulty: str
+    transcript: str
+    timestamp_start: Optional[str] = None
+    timestamp_end: Optional[str] = None
+    relevance_score: float # 0 to 100
+    technical_score: float # 0 to 100
+    completeness_score: float # 0 to 100
+    average_score: float # 0 to 100
+    explanation: str
+    key_strengths: List[str] = []
+    missing_points: List[str] = []
+
+class ResumeClaimVerification(BaseModel):
+    claim_text: str
+    status: str # "consistent", "potential_inconsistency", "unsupported"
+    answer_excerpt: str
+    resume_evidence: Optional[str] = None
+    explanation: str
+
+class FullTranscriptEntry(BaseModel):
+    speaker: str # "interviewer" or "candidate"
+    speaker_name: Optional[str] = None
+    text: str
+    timestamp: str
+    question_id: Optional[int] = None
+
+class InterviewAnalysisResponse(BaseModel):
+    id: int
+    interview_id: int
+    status: str # pending, processing, completed, failed
+    error_message: Optional[str] = None
+    overall_relevance_score: float
+    overall_technical_score: float
+    overall_completeness_score: float
+    average_score: float
+    question_evaluations: List[QuestionAnswerEvaluation] = []
+    resume_claims: List[ResumeClaimVerification] = []
+    full_transcript: List[FullTranscriptEntry] = []
+    created_at: datetime
+    updated_at: Optional[datetime] = None
+
+    class Config:
+        from_attributes = True
+
 class InterviewResponse(BaseModel):
     id: int
     title: str
@@ -214,7 +263,9 @@ class InterviewResponse(BaseModel):
     created_at: datetime
     match_score: Optional[MatchBreakdownResponse] = None
     questions: List[InterviewQuestionResponse] = []
+    analysis: Optional[InterviewAnalysisResponse] = None
 
     class Config:
         from_attributes = True
+
 

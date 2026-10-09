@@ -173,6 +173,7 @@ class Interview(Base):
     job_description = relationship("JobDescription", back_populates="interviews")
     questions = relationship("InterviewQuestion", back_populates="interview", cascade="all, delete-orphan", order_by="InterviewQuestion.order_index")
     results = relationship("InterviewResult", back_populates="interview", cascade="all, delete-orphan")
+    analysis = relationship("InterviewAnalysisResult", back_populates="interview", uselist=False, cascade="all, delete-orphan")
 
 class InterviewQuestion(Base):
     """Phase 3: AI-generated & custom questions with category, difficulty, and order"""
@@ -189,6 +190,35 @@ class InterviewQuestion(Base):
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
     interview = relationship("Interview", back_populates="questions")
+
+class InterviewAnalysisResult(Base):
+    """Phase 5: Speech-to-text transcript, question-wise answer analysis, and resume claim verification"""
+    __tablename__ = "interview_analysis_results"
+
+    id = Column(Integer, primary_key=True, index=True)
+    interview_id = Column(Integer, ForeignKey("interviews.id", ondelete="CASCADE"), unique=True, nullable=False)
+    status = Column(String(50), default="completed") # pending, processing, completed, failed
+    error_message = Column(Text, nullable=True)
+
+    # Summary metrics
+    overall_relevance_score = Column(Float, default=0.0) # 0-100
+    overall_technical_score = Column(Float, default=0.0) # 0-100
+    overall_completeness_score = Column(Float, default=0.0) # 0-100
+    average_score = Column(Float, default=0.0) # 0-100
+
+    # Detailed question-by-question evaluations (JSON string)
+    question_evaluations = Column(Text, nullable=True)
+
+    # Resume claim verifications (JSON string)
+    resume_claims = Column(Text, nullable=True)
+
+    # Full session chronological transcript with timestamps (JSON string)
+    full_transcript = Column(Text, nullable=True)
+
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    interview = relationship("Interview", back_populates="analysis")
 
 class InterviewResult(Base):
     """Placeholder model for evaluation metrics to be populated in upcoming AI phases"""

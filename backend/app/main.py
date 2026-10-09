@@ -17,7 +17,7 @@ from app.database import engine, get_db, SessionLocal
 from app.models import (
     Base, User, CandidateProfile, Resume, JobDescription,
     ResumeJobMatch, Interview, InterviewQuestion, InterviewResult,
-    Notification, UserRole, InterviewStatus
+    InterviewAnalysisResult, Notification, UserRole, InterviewStatus
 )
 from app.auth import (
     get_password_hash, verify_password, create_access_token,
@@ -30,12 +30,14 @@ from app.schemas import (
     JobDescriptionCreate, JobDescriptionResponse,
     InterviewCreate, InterviewResponse, MatchBreakdownResponse, CandidateMatchDetail,
     InterviewQuestionCreate, InterviewQuestionUpdate, InterviewQuestionResponse,
-    InterviewSessionUpdateRequest, RecordingConsentRequest
+    InterviewSessionUpdateRequest, RecordingConsentRequest,
+    InterviewAnalysisResponse, QuestionAnswerEvaluation, ResumeClaimVerification, FullTranscriptEntry
 )
 from app.ai.resume_parser import parse_resume_document
 from app.ai.jd_analyzer import analyze_job_description
 from app.ai.matcher import match_resume_to_jd
 from app.ai.question_generator import generate_personalized_questions
+from app.ai.analysis_service import run_complete_interview_analysis
 
 # Initialize database schema
 Base.metadata.create_all(bind=engine)
@@ -461,6 +463,47 @@ def format_question_response(q: InterviewQuestion) -> InterviewQuestionResponse:
         updated_at=q.updated_at
     )
 
+def format_analysis_response(an: InterviewAnalysisResult) -> InterviewAnalysisResponse:
+    q_evals = []
+    if an.question_evaluations:
+        try:
+            raw_evals = json.loads(an.question_evaluations)
+            q_evals = [QuestionAnswerEvaluation(**item) for item in raw_evals]
+        except Exception as e:
+            print("Error parsing question evaluations:", e)
+
+    claims = []
+    if an.resume_claims:
+        try:
+            raw_claims = json.loads(an.resume_claims)
+            claims = [ResumeClaimVerification(**item) for item in raw_claims]
+        except Exception as e:
+            print("Error parsing resume claims:", e)
+
+    transcript_list = []
+    if an.full_transcript:
+        try:
+            raw_transcripts = json.loads(an.full_transcript)
+            transcript_list = [FullTranscriptEntry(**item) for item in raw_transcripts]
+        except Exception as e:
+            print("Error parsing full transcript:", e)
+
+    return InterviewAnalysisResponse(
+        id=an.id,
+        interview_id=an.interview_id,
+        status=an.status or "completed",
+        error_message=an.error_message,
+        overall_relevance_score=an.overall_relevance_score or 0.0,
+        overall_technical_score=an.overall_technical_score or 0.0,
+        overall_completeness_score=an.overall_completeness_score or 0.0,
+        average_score=an.average_score or 0.0,
+        question_evaluations=q_evals,
+        resume_claims=claims,
+        full_transcript=transcript_list,
+        created_at=an.created_at,
+        updated_at=an.updated_at
+    )
+
 def format_interview_response(it: Interview, db: Session) -> InterviewResponse:
     match_data = None
     if it.candidate and it.candidate.candidate_profile and it.candidate.candidate_profile.resumes and it.job_description:
@@ -478,6 +521,10 @@ def format_interview_response(it: Interview, db: Session) -> InterviewResponse:
             session_meta = json.loads(it.session_metadata)
         except Exception:
             session_meta = None
+
+    analysis_data = None
+    if it.analysis:
+        analysis_data = format_analysis_response(it.analysis)
 
     return InterviewResponse(
         id=it.id,
@@ -502,7 +549,8 @@ def format_interview_response(it: Interview, db: Session) -> InterviewResponse:
         session_metadata=session_meta,
         created_at=it.created_at,
         match_score=match_data,
-        questions=questions_formatted
+        questions=questions_formatted,
+        analysis=analysis_data
     )
 
 def format_candidate_profile_response(profile: CandidateProfile, user: Optional[User] = None) -> CandidateProfileResponse:
@@ -1457,7 +1505,164 @@ def download_interview_recording(
     )
 
 
+# ----------------- PHASE 5: AI INTERVIEW ANALYSIS & TRANSCRIPTION ENDPOINTS -----------------
+
+@app.post("/api/interviews/{interview_id}/analysis", response_model=InterviewAnalysisResponse)
+def trigger_interview_analysis(
+    interview_id: int,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """
+    Triggers or retries Phase 5 AI Interview Analysis:
+    1. Speech-to-text transcript generation with timestamps
+    2. Question-by-question answer evaluation (relevance, technical accuracy, completeness)
+    3. Resume claim verification (consistent, potential inconsistency, unsupported)
+    """
+    interview = db.query(Interview).filter(Interview.id == interview_id).first()
+    if not interview:
+        raise HTTPException(status_code=404, detail="Interview not found")
+
+    # Only participants can trigger/view analysis
+    if current_user.id != interview.candidate_id and current_user.id != interview.interviewer_id:
+        raise HTTPException(status_code=403, detail="Unauthorized")
+
+    # Fetch parsed candidate resume & parsed JD
+    resume_parsed = None
+    resume_raw = ""
+    cand_profile_dict = {}
+    if interview.candidate and interview.candidate.candidate_profile:
+        profile = interview.candidate.candidate_profile
+        cand_profile_dict = {
+            "full_name": interview.candidate.full_name,
+            "skills": profile.skills,
+            "experience_years": profile.experience_years,
+            "education": json.loads(profile.education) if profile.education else [],
+            "experience_details": json.loads(profile.experience_details) if profile.experience_details else [],
+            "projects": json.loads(profile.projects) if profile.projects else [],
+            "certifications": json.loads(profile.certifications) if profile.certifications else []
+        }
+        if profile.resumes:
+            latest_r = sorted(profile.resumes, key=lambda r: r.uploaded_at, reverse=True)[0]
+            if latest_r.parsed_data:
+                resume_parsed = json.loads(latest_r.parsed_data)
+            resume_raw = latest_r.raw_text or ""
+
+    jd_parsed = None
+    if interview.job_description and interview.job_description.parsed_data:
+        jd_parsed = json.loads(interview.job_description.parsed_data)
+
+    # Format question objects for analysis
+    question_payload = [
+        {
+            "id": q.id,
+            "question_text": q.question_text,
+            "category": q.category,
+            "difficulty": q.difficulty,
+            "order_index": q.order_index
+        }
+        for q in interview.questions
+    ]
+
+    try:
+        # Run reusable AI Analysis Engine
+        analysis_data = run_complete_interview_analysis(
+            interview_id=interview.id,
+            recording_path=interview.recording_path,
+            questions=question_payload,
+            candidate_profile=cand_profile_dict,
+            jd_parsed=jd_parsed,
+            resume_parsed=resume_parsed,
+            resume_raw_text=resume_raw,
+            job_role=interview.job_role,
+            interviewer_name=interview.interviewer.full_name if interview.interviewer else "Interviewer",
+            candidate_name=interview.candidate.full_name if interview.candidate else "Candidate"
+        )
+
+        # Check existing analysis record or create new
+        analysis_record = db.query(InterviewAnalysisResult).filter(InterviewAnalysisResult.interview_id == interview.id).first()
+        if not analysis_record:
+            analysis_record = InterviewAnalysisResult(
+                interview_id=interview.id,
+                status="completed",
+                overall_relevance_score=analysis_data["overall_relevance_score"],
+                overall_technical_score=analysis_data["overall_technical_score"],
+                overall_completeness_score=analysis_data["overall_completeness_score"],
+                average_score=analysis_data["average_score"],
+                question_evaluations=json.dumps(analysis_data["question_evaluations"]),
+                resume_claims=json.dumps(analysis_data["resume_claims"]),
+                full_transcript=json.dumps(analysis_data["full_transcript"])
+            )
+            db.add(analysis_record)
+        else:
+            analysis_record.status = "completed"
+            analysis_record.error_message = None
+            analysis_record.overall_relevance_score = analysis_data["overall_relevance_score"]
+            analysis_record.overall_technical_score = analysis_data["overall_technical_score"]
+            analysis_record.overall_completeness_score = analysis_data["overall_completeness_score"]
+            analysis_record.average_score = analysis_data["average_score"]
+            analysis_record.question_evaluations = json.dumps(analysis_data["question_evaluations"])
+            analysis_record.resume_claims = json.dumps(analysis_data["resume_claims"])
+            analysis_record.full_transcript = json.dumps(analysis_data["full_transcript"])
+            analysis_record.updated_at = datetime.utcnow()
+
+        db.commit()
+        db.refresh(analysis_record)
+        return format_analysis_response(analysis_record)
+
+    except Exception as e:
+        db.rollback()
+        # Save failure state to allow retry
+        analysis_record = db.query(InterviewAnalysisResult).filter(InterviewAnalysisResult.interview_id == interview.id).first()
+        if not analysis_record:
+            analysis_record = InterviewAnalysisResult(
+                interview_id=interview.id,
+                status="failed",
+                error_message=str(e),
+                overall_relevance_score=0.0,
+                overall_technical_score=0.0,
+                overall_completeness_score=0.0,
+                average_score=0.0,
+                question_evaluations="[]",
+                resume_claims="[]",
+                full_transcript="[]"
+            )
+            db.add(analysis_record)
+        else:
+            analysis_record.status = "failed"
+            analysis_record.error_message = str(e)
+            analysis_record.updated_at = datetime.utcnow()
+        db.commit()
+        db.refresh(analysis_record)
+        return format_analysis_response(analysis_record)
+
+
+@app.get("/api/interviews/{interview_id}/analysis", response_model=InterviewAnalysisResponse)
+def get_interview_analysis(
+    interview_id: int,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """
+    Fetches completed analysis for an interview or automatically generates it if interview is completed.
+    """
+    interview = db.query(Interview).filter(Interview.id == interview_id).first()
+    if not interview:
+        raise HTTPException(status_code=404, detail="Interview not found")
+
+    if current_user.id != interview.candidate_id and current_user.id != interview.interviewer_id:
+        raise HTTPException(status_code=403, detail="Unauthorized")
+
+    analysis_record = db.query(InterviewAnalysisResult).filter(InterviewAnalysisResult.interview_id == interview.id).first()
+    if not analysis_record:
+        # Generate automatically
+        return trigger_interview_analysis(interview_id, current_user=current_user, db=db)
+
+    return format_analysis_response(analysis_record)
+
+
 @app.get("/api/health")
 def health_check():
-    return {"status": "ok", "platform": "AI Interview Platform with WebRTC Live Rooms & Profile Sync"}
+    return {"status": "ok", "platform": "AI Interview Platform with Phase 5 Speech-to-Text & AI Analysis Engine"}
+
 
