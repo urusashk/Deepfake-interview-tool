@@ -488,6 +488,13 @@ def format_analysis_response(an: InterviewAnalysisResult) -> InterviewAnalysisRe
         except Exception as e:
             print("Error parsing full transcript:", e)
 
+    behaviour_data = None
+    if an.behaviour_metrics_json:
+        try:
+            behaviour_data = json.loads(an.behaviour_metrics_json)
+        except Exception as e:
+            print("Error parsing behaviour metrics:", e)
+
     return InterviewAnalysisResponse(
         id=an.id,
         interview_id=an.interview_id,
@@ -500,6 +507,7 @@ def format_analysis_response(an: InterviewAnalysisResult) -> InterviewAnalysisRe
         question_evaluations=q_evals,
         resume_claims=claims,
         full_transcript=transcript_list,
+        behaviour_analysis=behaviour_data,
         created_at=an.created_at,
         updated_at=an.updated_at
     )
@@ -1591,7 +1599,8 @@ def trigger_interview_analysis(
                 average_score=analysis_data["average_score"],
                 question_evaluations=json.dumps(analysis_data["question_evaluations"]),
                 resume_claims=json.dumps(analysis_data["resume_claims"]),
-                full_transcript=json.dumps(analysis_data["full_transcript"])
+                full_transcript=json.dumps(analysis_data["full_transcript"]),
+                behaviour_metrics_json=json.dumps(analysis_data.get("behaviour_analysis", {}))
             )
             db.add(analysis_record)
         else:
@@ -1604,6 +1613,7 @@ def trigger_interview_analysis(
             analysis_record.question_evaluations = json.dumps(analysis_data["question_evaluations"])
             analysis_record.resume_claims = json.dumps(analysis_data["resume_claims"])
             analysis_record.full_transcript = json.dumps(analysis_data["full_transcript"])
+            analysis_record.behaviour_metrics_json = json.dumps(analysis_data.get("behaviour_analysis", {}))
             analysis_record.updated_at = datetime.utcnow()
 
         db.commit()

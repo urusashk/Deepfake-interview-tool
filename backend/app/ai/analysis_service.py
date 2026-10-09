@@ -4,6 +4,9 @@ import re
 from typing import List, Dict, Any, Optional
 from datetime import datetime
 
+from app.ai.video_behaviour_service import analyze_video_behaviour
+from app.ai.audio_behaviour_service import analyze_audio_behaviour
+
 # Sample vocabulary & context-aware technical response templates for speech synthesis / transcription fallback
 TECHNICAL_VOCAB = {
     "python": ["FastAPI", "Django", "GIL", "async/await", "generators", "concurrency", "decorators", "memory management"],
@@ -461,6 +464,35 @@ def run_complete_interview_analysis(
         resume_raw_text=resume_raw_text
     )
     
+    # 4. Phase 6: Video Behaviour Analysis (observable kinematic cues & timeline)
+    video_behaviour_res = analyze_video_behaviour(
+        interview_id=interview_id,
+        recording_path=recording_path,
+        questions=questions
+    )
+    
+    # 5. Phase 6: Audio Behaviour Analysis (pacing, response delay, fillers, clarity)
+    audio_behaviour_res = analyze_audio_behaviour(
+        interview_id=interview_id,
+        recording_path=recording_path,
+        transcripts=question_transcripts,
+        full_transcript_dialogue=full_transcript
+    )
+    
+    behaviour_report = {
+        "video_behaviour": video_behaviour_res,
+        "audio_behaviour": audio_behaviour_res,
+        "summary": {
+            "head_stability_percentage": video_behaviour_res["metrics"]["head_stability_percentage"],
+            "visual_attention_score": video_behaviour_res["metrics"]["visual_attention_score"],
+            "words_per_minute": audio_behaviour_res["metrics"]["words_per_minute"],
+            "average_response_delay_seconds": audio_behaviour_res["metrics"]["average_response_delay_seconds"],
+            "filler_density_percentage": audio_behaviour_res["metrics"]["filler_density_percentage"],
+            "speech_clarity_score": audio_behaviour_res["metrics"]["speech_clarity_score"],
+            "candidate_speaking_percentage": audio_behaviour_res["metrics"]["speaking_distribution"]["candidate_percentage"]
+        }
+    }
+    
     return {
         "status": "completed",
         "overall_relevance_score": eval_res["overall_relevance_score"],
@@ -469,5 +501,6 @@ def run_complete_interview_analysis(
         "average_score": eval_res["average_score"],
         "question_evaluations": eval_res["question_evaluations"],
         "resume_claims": claim_verifications,
-        "full_transcript": full_transcript
+        "full_transcript": full_transcript,
+        "behaviour_analysis": behaviour_report
     }

@@ -233,6 +233,7 @@ class InterviewAnalysisResponse(BaseModel):
     question_evaluations: List[QuestionAnswerEvaluation] = []
     resume_claims: List[ResumeClaimVerification] = []
     full_transcript: List[FullTranscriptEntry] = []
+    behaviour_analysis: Optional[Dict[str, Any]] = None
     created_at: datetime
     updated_at: Optional[datetime] = None
 

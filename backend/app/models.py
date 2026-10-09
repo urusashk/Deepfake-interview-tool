@@ -215,6 +215,9 @@ class InterviewAnalysisResult(Base):
     # Full session chronological transcript with timestamps (JSON string)
     full_transcript = Column(Text, nullable=True)
 
+    # Phase 6: Video and Audio Behaviour Analysis metrics & timeline (JSON string)
+    behaviour_metrics_json = Column(Text, nullable=True)
+
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
