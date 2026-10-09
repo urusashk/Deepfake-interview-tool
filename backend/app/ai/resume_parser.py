@@ -1,7 +1,7 @@
 import os
 import re
 import json
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Optional
 from pypdf import PdfReader
 import docx
 
@@ -224,10 +224,60 @@ def extract_certifications(text: str) -> List[str]:
 
     return certs[:5]
 
+def extract_contact_info(text: str) -> Dict[str, Optional[str]]:
+    """Extract candidate name, email, phone number, and optional headline from resume text."""
+    lines = [l.strip() for l in text.split("\n") if l.strip()]
+    
+    # 1. Email extraction
+    email_pattern = r'[a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+'
+    emails = re.findall(email_pattern, text)
+    email = emails[0].lower() if emails else None
+    
+    # 2. Phone extraction
+    phone_pattern = r'(?:\+?\d{1,3}[-.\s]?)?(?:\(?\d{3}\)?[-.\s]?)?\d{3}[-.\s]?\d{4}'
+    phones = re.findall(phone_pattern, text)
+    phone = None
+    for p in phones:
+        digits = re.sub(r'\D', '', p)
+        if 10 <= len(digits) <= 15:
+            phone = p.strip()
+            break
+            
+    # 3. Name extraction (heuristic: first non-header line that has 2-4 words, alphabetic, < 40 chars)
+    name = None
+    candidate_name_lines = lines[:8]
+    for line in candidate_name_lines:
+        clean_l = re.sub(r'[^a-zA-Z\s]', '', line).strip()
+        words = clean_l.split()
+        lower_l = line.lower()
+        if any(h in lower_l for h in ["resume", "curriculum", "vitae", "cv", "email", "phone", "profile", "summary", "skills", "experience", "education", "http", "www", "github", "linkedin"]):
+            continue
+        if 2 <= len(words) <= 4 and 4 <= len(clean_l) <= 40:
+            if not re.search(r'\d', line):
+                name = clean_l.title()
+                break
+                
+    # 4. Professional headline / role title heuristic
+    headline = None
+    role_keywords = ["engineer", "developer", "architect", "manager", "lead", "analyst", "scientist", "consultant", "specialist", "designer", "administrator"]
+    for line in lines[:12]:
+        lower_l = line.lower()
+        if any(k in lower_l for k in role_keywords) and len(line) < 100:
+            if not any(h in lower_l for h in ["experience", "education", "responsibilities", "university", "college", "school"]):
+                headline = line.strip()
+                break
+
+    return {
+        "name": name,
+        "email": email,
+        "phone": phone,
+        "headline": headline
+    }
+
 def parse_resume_document(file_path: str, file_type: str, existing_headline: str = "") -> Dict[str, Any]:
     """
     Main entry point for Phase 2 Resume Parsing.
-    Extracts text, skills, education, work experience, projects, certifications, and technologies.
+    Extracts text, contact info, skills, education, work experience, projects, certifications, and technologies.
     """
     raw_text = extract_text_from_file(file_path, file_type)
     
@@ -235,6 +285,7 @@ def parse_resume_document(file_path: str, file_type: str, existing_headline: str
     if not raw_text or len(raw_text) < 20:
         raw_text = f"Resume Document: {os.path.basename(file_path)}\nHeadline: {existing_headline or 'Software Professional'}"
 
+    contact_info = extract_contact_info(raw_text)
     skills_tech = extract_skills_and_technologies(raw_text)
     education = extract_education(raw_text)
     experience = extract_experience(raw_text)
@@ -242,6 +293,10 @@ def parse_resume_document(file_path: str, file_type: str, existing_headline: str
     certifications = extract_certifications(raw_text)
 
     parsed_result = {
+        "name": contact_info["name"],
+        "email": contact_info["email"],
+        "phone": contact_info["phone"],
+        "headline": contact_info["headline"] or existing_headline or None,
         "skills": skills_tech["skills"],
         "technologies": skills_tech["technologies"],
         "education": education,

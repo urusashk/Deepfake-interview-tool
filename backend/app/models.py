@@ -11,6 +11,7 @@ class UserRole(str, enum.Enum):
 
 class InterviewStatus(str, enum.Enum):
     SCHEDULED = "scheduled"
+    IN_PROGRESS = "in_progress"
     COMPLETED = "completed"
     CANCELLED = "cancelled"
 
@@ -41,6 +42,7 @@ class User(Base):
     created_interviews = relationship("Interview", foreign_keys="[Interview.interviewer_id]", back_populates="interviewer")
     assigned_interviews = relationship("Interview", foreign_keys="[Interview.candidate_id]", back_populates="candidate")
     job_descriptions = relationship("JobDescription", back_populates="created_by_user")
+    notifications = relationship("Notification", back_populates="user", cascade="all, delete-orphan", order_by="desc(Notification.created_at)")
 
 class CandidateProfile(Base):
     __tablename__ = "candidate_profiles"
@@ -51,11 +53,33 @@ class CandidateProfile(Base):
     headline = Column(String(255), nullable=True)
     skills = Column(Text, nullable=True) # Comma-separated or JSON list
     experience_years = Column(Float, default=0.0)
+    education = Column(Text, nullable=True) # JSON array of education details
+    experience_details = Column(Text, nullable=True) # JSON array of experience details
+    projects = Column(Text, nullable=True) # JSON array of projects
+    certifications = Column(Text, nullable=True) # JSON array of certifications
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
     user = relationship("User", back_populates="candidate_profile")
     resumes = relationship("Resume", back_populates="candidate_profile", cascade="all, delete-orphan")
+
+class Notification(Base):
+    __tablename__ = "notifications"
+
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    interview_id = Column(Integer, ForeignKey("interviews.id", ondelete="SET NULL"), nullable=True)
+    title = Column(String(255), nullable=False)
+    message = Column(Text, nullable=False)
+    job_role = Column(String(150), nullable=True)
+    scheduled_time = Column(DateTime, nullable=True)
+    interviewer_name = Column(String(255), nullable=True)
+    is_read = Column(Integer, default=0) # 0 = unread, 1 = read
+    email_sent = Column(Integer, default=0) # 0 = no/pending, 1 = sent
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    user = relationship("User", back_populates="notifications")
+    interview = relationship("Interview")
 
 class Resume(Base):
     __tablename__ = "resumes"
@@ -132,6 +156,16 @@ class Interview(Base):
     scheduled_time = Column(DateTime, nullable=False)
     status = Column(Enum(InterviewStatus), default=InterviewStatus.SCHEDULED)
     notes = Column(Text, nullable=True)
+    
+    # Phase 4: Room session tracking & WebRTC recording metadata
+    start_time = Column(DateTime, nullable=True)
+    end_time = Column(DateTime, nullable=True)
+    current_question_index = Column(Integer, default=0)
+    recording_path = Column(String(500), nullable=True)
+    recording_consent_candidate = Column(Integer, default=0) # 0=pending/denied, 1=consented
+    recording_consent_interviewer = Column(Integer, default=0) # 0=pending/denied, 1=consented
+    session_metadata = Column(Text, nullable=True) # JSON with participant events, speech/deepfake prep tags
+    
     created_at = Column(DateTime, default=datetime.utcnow)
 
     interviewer = relationship("User", foreign_keys=[interviewer_id], back_populates="created_interviews")

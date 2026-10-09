@@ -47,10 +47,16 @@ class MatchBreakdownResponse(BaseModel):
 
 # Profile & Resume Schemas
 class CandidateProfileUpdate(BaseModel):
+    full_name: Optional[str] = None
+    email: Optional[EmailStr] = None
     phone: Optional[str] = None
     headline: Optional[str] = None
     skills: Optional[str] = None
-    experience_years: Optional[float] = 0.0
+    experience_years: Optional[float] = None
+    education: Optional[List[Dict[str, Any]]] = None
+    experience_details: Optional[List[str]] = None
+    projects: Optional[List[Dict[str, Any]]] = None
+    certifications: Optional[List[str]] = None
 
 class ResumeResponse(BaseModel):
     id: int
@@ -67,14 +73,40 @@ class ResumeResponse(BaseModel):
 class CandidateProfileResponse(BaseModel):
     id: int
     user_id: int
-    phone: Optional[str]
-    headline: Optional[str]
-    skills: Optional[str]
-    experience_years: float
+    full_name: Optional[str] = None
+    email: Optional[str] = None
+    phone: Optional[str] = None
+    headline: Optional[str] = None
+    skills: Optional[str] = None
+    experience_years: float = 0.0
+    education: Optional[List[Dict[str, Any]]] = None
+    experience_details: Optional[List[str]] = None
+    projects: Optional[List[Dict[str, Any]]] = None
+    certifications: Optional[List[str]] = None
     resumes: List[ResumeResponse] = []
 
     class Config:
         from_attributes = True
+
+# Notification Schemas
+class NotificationResponse(BaseModel):
+    id: int
+    user_id: int
+    interview_id: Optional[int] = None
+    title: str
+    message: str
+    job_role: Optional[str] = None
+    scheduled_time: Optional[datetime] = None
+    interviewer_name: Optional[str] = None
+    is_read: int
+    email_sent: int
+    created_at: datetime
+
+    class Config:
+        from_attributes = True
+
+class NotificationMarkReadRequest(BaseModel):
+    notification_ids: Optional[List[int]] = None # None means mark all as read
 
 # Candidate with Match for Interviewer View
 class CandidateMatchDetail(BaseModel):
@@ -86,6 +118,10 @@ class CandidateMatchDetail(BaseModel):
     headline: Optional[str] = None
     skills: Optional[str] = None
     experience_years: float = 0.0
+    education: Optional[List[Dict[str, Any]]] = None
+    experience_details: Optional[List[str]] = None
+    projects: Optional[List[Dict[str, Any]]] = None
+    certifications: Optional[List[str]] = None
     latest_resume: Optional[ResumeResponse] = None
     match_score: Optional[MatchBreakdownResponse] = None
 
@@ -144,6 +180,16 @@ class InterviewCreate(BaseModel):
     scheduled_time: datetime
     notes: Optional[str] = None
 
+class InterviewSessionUpdateRequest(BaseModel):
+    start_time: Optional[datetime] = None
+    end_time: Optional[datetime] = None
+    current_question_index: Optional[int] = None
+    status: Optional[str] = None # scheduled, in_progress, completed, cancelled
+    session_metadata: Optional[Dict[str, Any]] = None
+
+class RecordingConsentRequest(BaseModel):
+    consent: bool
+
 class InterviewResponse(BaseModel):
     id: int
     title: str
@@ -158,9 +204,17 @@ class InterviewResponse(BaseModel):
     scheduled_time: datetime
     status: str
     notes: Optional[str]
+    start_time: Optional[datetime] = None
+    end_time: Optional[datetime] = None
+    current_question_index: int = 0
+    recording_path: Optional[str] = None
+    recording_consent_candidate: int = 0
+    recording_consent_interviewer: int = 0
+    session_metadata: Optional[Dict[str, Any]] = None
     created_at: datetime
     match_score: Optional[MatchBreakdownResponse] = None
     questions: List[InterviewQuestionResponse] = []
 
     class Config:
         from_attributes = True
+

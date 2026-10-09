@@ -3,8 +3,12 @@ import uuid
 import json
 import aiofiles
 from datetime import datetime
-from typing import List, Optional
-from fastapi import FastAPI, Depends, HTTPException, status, UploadFile, File, Form
+from typing import List, Optional, Dict, Any
+from fastapi import (
+    FastAPI, Depends, HTTPException, status, UploadFile, File, Form,
+    WebSocket, WebSocketDisconnect, Query
+)
+from fastapi.responses import FileResponse
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import Session
 from sqlalchemy import desc
@@ -13,7 +17,7 @@ from app.database import engine, get_db, SessionLocal
 from app.models import (
     Base, User, CandidateProfile, Resume, JobDescription,
     ResumeJobMatch, Interview, InterviewQuestion, InterviewResult,
-    UserRole, InterviewStatus
+    Notification, UserRole, InterviewStatus
 )
 from app.auth import (
     get_password_hash, verify_password, create_access_token,
@@ -22,9 +26,11 @@ from app.auth import (
 from app.schemas import (
     UserRegisterRequest, UserLoginRequest, TokenResponse, UserResponse,
     CandidateProfileUpdate, CandidateProfileResponse, ResumeResponse,
+    NotificationResponse, NotificationMarkReadRequest,
     JobDescriptionCreate, JobDescriptionResponse,
     InterviewCreate, InterviewResponse, MatchBreakdownResponse, CandidateMatchDetail,
-    InterviewQuestionCreate, InterviewQuestionUpdate, InterviewQuestionResponse
+    InterviewQuestionCreate, InterviewQuestionUpdate, InterviewQuestionResponse,
+    InterviewSessionUpdateRequest, RecordingConsentRequest
 )
 from app.ai.resume_parser import parse_resume_document
 from app.ai.jd_analyzer import analyze_job_description
@@ -36,13 +42,94 @@ Base.metadata.create_all(bind=engine)
 
 # Upload directory setup
 UPLOAD_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "uploads", "resumes"))
+RECORDINGS_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "uploads", "recordings"))
 os.makedirs(UPLOAD_DIR, exist_ok=True)
+os.makedirs(RECORDINGS_DIR, exist_ok=True)
 
 app = FastAPI(
-    title="AI Interview Platform - Phase 3",
-    description="AI-powered personalized interview question generation, question management, resume parsing, and resume-JD matching.",
-    version="3.0.0"
+    title="AI Interview Platform",
+    description="AI-powered interview platform with WebRTC live video rooms, profile sync, question management, and scheduling notifications.",
+    version="4.0.0"
 )
+
+# ----------------- WEBRTC & ROOM SIGNALING MANAGER -----------------
+class ConnectionManager:
+    def __init__(self):
+        # Map interview_id -> list of active WebSocket connections
+        self.rooms: Dict[int, List[Dict[str, Any]]] = {}
+
+    async def connect(self, interview_id: int, websocket: WebSocket, user_id: int, user_name: str, user_role: str):
+        await websocket.accept()
+        if interview_id not in self.rooms:
+            self.rooms[interview_id] = []
+        
+        client_info = {
+            "ws": websocket,
+            "user_id": user_id,
+            "user_name": user_name,
+            "user_role": user_role
+        }
+        self.rooms[interview_id].append(client_info)
+
+        # Notify existing peers in the room that a new peer joined
+        for peer in self.rooms[interview_id]:
+            if peer["ws"] != websocket:
+                try:
+                    await peer["ws"].send_json({
+                        "type": "peer-joined",
+                        "user_id": user_id,
+                        "user_name": user_name,
+                        "user_role": user_role
+                    })
+                except Exception:
+                    pass
+
+        # Send room state / list of other participants to the newly joined peer
+        other_participants = [
+            {"user_id": p["user_id"], "user_name": p["user_name"], "user_role": p["user_role"]}
+            for p in self.rooms[interview_id] if p["ws"] != websocket
+        ]
+        await websocket.send_json({
+            "type": "room-state",
+            "participants": other_participants
+        })
+
+    def disconnect(self, interview_id: int, websocket: WebSocket):
+        if interview_id in self.rooms:
+            disconnected_user = None
+            for p in self.rooms[interview_id]:
+                if p["ws"] == websocket:
+                    disconnected_user = p
+                    break
+            
+            self.rooms[interview_id] = [p for p in self.rooms[interview_id] if p["ws"] != websocket]
+            
+            if not self.rooms[interview_id]:
+                del self.rooms[interview_id]
+            elif disconnected_user:
+                # Notify remaining room participants
+                for peer in self.rooms[interview_id]:
+                    try:
+                        import asyncio
+                        asyncio.create_task(peer["ws"].send_json({
+                            "type": "peer-left",
+                            "user_id": disconnected_user["user_id"],
+                            "user_name": disconnected_user["user_name"]
+                        }))
+                    except Exception:
+                        pass
+
+    async def broadcast_to_room(self, interview_id: int, message: dict, sender_ws: Optional[WebSocket] = None):
+        if interview_id in self.rooms:
+            for peer in self.rooms[interview_id]:
+                if sender_ws is None or peer["ws"] != sender_ws:
+                    try:
+                        await peer["ws"].send_json(message)
+                    except Exception:
+                        pass
+
+manager = ConnectionManager()
+
 
 # Enable CORS for frontend
 app.add_middleware(
@@ -53,7 +140,58 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# ----------------- SEED DATA HELPER (PHASE 3 READY) -----------------
+# ----------------- EMAIL NOTIFICATION HELPER -----------------
+def send_interview_email_notification(candidate_email: str, candidate_name: str, interview_title: str, job_role: str, scheduled_time: datetime, interviewer_name: str) -> bool:
+    """
+    Sends email notification if SMTP is configured.
+    Falls back gracefully if SMTP settings are not provided in environment variables.
+    """
+    smtp_host = os.environ.get("SMTP_HOST")
+    smtp_port = os.environ.get("SMTP_PORT")
+    smtp_user = os.environ.get("SMTP_USER")
+    smtp_pass = os.environ.get("SMTP_PASSWORD")
+
+    if not smtp_host or not smtp_user:
+        # Email not configured - in-app notification handles delivery
+        return False
+
+    try:
+        import smtplib
+        from email.mime.text import MIMEText
+        from email.mime.multipart import MIMEMultipart
+
+        msg = MIMEMultipart()
+        msg['From'] = smtp_user
+        msg['To'] = candidate_email
+        msg['Subject'] = f"Interview Scheduled: {interview_title} ({job_role})"
+
+        body = f"""Hello {candidate_name},
+
+Your interview has been scheduled!
+
+Interview: {interview_title}
+Job Role: {job_role}
+Interviewer: {interviewer_name}
+Date & Time: {scheduled_time.strftime('%B %d, %Y at %I:%M %p UTC')}
+
+Please log in to your candidate dashboard to review your preparation and details.
+
+Best regards,
+Hiring Team
+"""
+        msg.attach(MIMEText(body, 'plain'))
+
+        with smtplib.SMTP(smtp_host, int(smtp_port or 587)) as server:
+            server.starttls()
+            if smtp_pass:
+                server.login(smtp_user, smtp_pass)
+            server.send_message(msg)
+        return True
+    except Exception as e:
+        print(f"Email delivery notification notice: {e}")
+        return False
+
+# ----------------- SEED DATA HELPER -----------------
 def init_seed_data():
     db = SessionLocal()
     try:
@@ -79,13 +217,28 @@ def init_seed_data():
             db.refresh(interviewer)
             db.refresh(candidate)
 
+            mock_edu = [{"degree": "Bachelor of Science in Computer Science", "raw_context": "B.S. Computer Science, University of California"}]
+            mock_exp_details = [
+                "Senior Software Engineer at Nexus Tech (2022 - Present) - FastAPI & Microservices",
+                "Full Stack Developer at CloudWave (2020 - 2022) - Python, React, PostgreSQL"
+            ]
+            mock_projects = [
+                {"title": "High-Throughput ML Inference Gateway", "description": "Built asynchronous FastAPI gateway handling 10k req/sec with Docker and Redis."},
+                {"title": "Automated Candidate Evaluation Platform", "description": "Designed full-stack analytics pipeline in React and Python."}
+            ]
+            mock_certs = ["AWS Certified Solutions Architect - Associate"]
+
             # Create profile for candidate
             profile = CandidateProfile(
                 user_id=candidate.id,
                 phone="+1 (555) 349-8821",
                 headline="Senior Full-Stack & Python Engineer",
                 skills="Python, FastAPI, React, TypeScript, PostgreSQL, Docker, AWS, Scikit-Learn",
-                experience_years=4.5
+                experience_years=4.5,
+                education=json.dumps(mock_edu),
+                experience_details=json.dumps(mock_exp_details),
+                projects=json.dumps(mock_projects),
+                certifications=json.dumps(mock_certs)
             )
             db.add(profile)
             db.commit()
@@ -110,21 +263,19 @@ def init_seed_data():
 
             # Create sample mock resume
             resume_parsed_mock = {
+                "name": "Alex Chen",
+                "email": "candidate@platform.ai",
+                "phone": "+1 (555) 349-8821",
+                "headline": "Senior Full-Stack & Python Engineer",
                 "skills": ["Python", "FastAPI", "React", "TypeScript", "PostgreSQL", "Docker", "AWS", "Git", "REST API", "SQL", "Scikit-Learn"],
                 "technologies": ["FastAPI", "React", "PostgreSQL", "Docker", "AWS"],
-                "education": [{"degree": "Bachelor of Science in Computer Science", "raw_context": "B.S. Computer Science, University of California"}],
+                "education": mock_edu,
                 "work_experience": {
                     "estimated_years": 4.5,
-                    "roles_and_companies": [
-                        "Senior Software Engineer at Nexus Tech (2022 - Present) - FastAPI & Microservices",
-                        "Full Stack Developer at CloudWave (2020 - 2022) - Python, React, PostgreSQL"
-                    ]
+                    "roles_and_companies": mock_exp_details
                 },
-                "projects": [
-                    {"title": "High-Throughput ML Inference Gateway", "description": "Built asynchronous FastAPI gateway handling 10k req/sec with Docker and Redis."},
-                    {"title": "Automated Candidate Evaluation Platform", "description": "Designed full-stack analytics pipeline in React and Python."}
-                ],
-                "certifications": ["AWS Certified Solutions Architect - Associate"],
+                "projects": mock_projects,
+                "certifications": mock_certs,
                 "summary": "Experienced Python and Cloud Systems Engineer with 4.5+ years building scalable microservices and APIs."
             }
 
@@ -177,6 +328,21 @@ def init_seed_data():
             db.add(interview1)
             db.commit()
             db.refresh(interview1)
+
+            # Create initial notification for candidate
+            notif = Notification(
+                user_id=candidate.id,
+                interview_id=interview1.id,
+                title="Interview Scheduled: Technical Architecture Round",
+                message=f"You have an upcoming interview for Senior AI Systems Engineer with {interviewer.full_name}.",
+                job_role=interview1.job_role,
+                scheduled_time=interview1.scheduled_time,
+                interviewer_name=interviewer.full_name,
+                is_read=0,
+                email_sent=0
+            )
+            db.add(notif)
+            db.commit()
 
             # Auto-generate Phase 3 Questions for the demo interview
             generated_qs = generate_personalized_questions(
@@ -305,6 +471,14 @@ def format_interview_response(it: Interview, db: Session) -> InterviewResponse:
 
     questions_formatted = [format_question_response(q) for q in it.questions]
 
+    # Parse session metadata if available
+    session_meta = None
+    if it.session_metadata:
+        try:
+            session_meta = json.loads(it.session_metadata)
+        except Exception:
+            session_meta = None
+
     return InterviewResponse(
         id=it.id,
         title=it.title,
@@ -319,9 +493,40 @@ def format_interview_response(it: Interview, db: Session) -> InterviewResponse:
         scheduled_time=it.scheduled_time,
         status=it.status.value,
         notes=it.notes,
+        start_time=it.start_time,
+        end_time=it.end_time,
+        current_question_index=it.current_question_index or 0,
+        recording_path=f"/api/interviews/{it.id}/recording" if it.recording_path else None,
+        recording_consent_candidate=it.recording_consent_candidate or 0,
+        recording_consent_interviewer=it.recording_consent_interviewer or 0,
+        session_metadata=session_meta,
         created_at=it.created_at,
         match_score=match_data,
         questions=questions_formatted
+    )
+
+def format_candidate_profile_response(profile: CandidateProfile, user: Optional[User] = None) -> CandidateProfileResponse:
+    resumes_formatted = [format_resume_response(r) for r in profile.resumes]
+    edu_list = json.loads(profile.education) if profile.education else []
+    exp_list = json.loads(profile.experience_details) if profile.experience_details else []
+    proj_list = json.loads(profile.projects) if profile.projects else []
+    cert_list = json.loads(profile.certifications) if profile.certifications else []
+
+    target_user = user or profile.user
+    return CandidateProfileResponse(
+        id=profile.id,
+        user_id=profile.user_id,
+        full_name=target_user.full_name if target_user else None,
+        email=target_user.email if target_user else None,
+        phone=profile.phone,
+        headline=profile.headline,
+        skills=profile.skills,
+        experience_years=profile.experience_years or 0.0,
+        education=edu_list,
+        experience_details=exp_list,
+        projects=proj_list,
+        certifications=cert_list,
+        resumes=resumes_formatted
     )
 
 # ----------------- AUTH ROUTING -----------------
@@ -394,16 +599,7 @@ def get_candidate_profile(
         db.commit()
         db.refresh(profile)
     
-    resumes_formatted = [format_resume_response(r) for r in profile.resumes]
-    return CandidateProfileResponse(
-        id=profile.id,
-        user_id=profile.user_id,
-        phone=profile.phone,
-        headline=profile.headline,
-        skills=profile.skills,
-        experience_years=profile.experience_years,
-        resumes=resumes_formatted
-    )
+    return format_candidate_profile_response(profile, current_user)
 
 @app.put("/api/candidate/profile", response_model=CandidateProfileResponse)
 def update_candidate_profile(
@@ -415,7 +611,21 @@ def update_candidate_profile(
     if not profile:
         profile = CandidateProfile(user_id=current_user.id)
         db.add(profile)
-    
+
+    # Allow updating full_name or email on the user record if provided
+    user_updated = False
+    if profile_data.full_name is not None and profile_data.full_name.strip():
+        current_user.full_name = profile_data.full_name.strip()
+        user_updated = True
+    if profile_data.email is not None and profile_data.email.strip():
+        new_email = profile_data.email.strip().lower()
+        if new_email != current_user.email:
+            existing = db.query(User).filter(User.email == new_email, User.id != current_user.id).first()
+            if existing:
+                raise HTTPException(status_code=400, detail="Email is already used by another account")
+            current_user.email = new_email
+            user_updated = True
+
     if profile_data.phone is not None:
         profile.phone = profile_data.phone
     if profile_data.headline is not None:
@@ -424,20 +634,22 @@ def update_candidate_profile(
         profile.skills = profile_data.skills
     if profile_data.experience_years is not None:
         profile.experience_years = profile_data.experience_years
+    if profile_data.education is not None:
+        profile.education = json.dumps(profile_data.education)
+    if profile_data.experience_details is not None:
+        profile.experience_details = json.dumps(profile_data.experience_details)
+    if profile_data.projects is not None:
+        profile.projects = json.dumps(profile_data.projects)
+    if profile_data.certifications is not None:
+        profile.certifications = json.dumps(profile_data.certifications)
     
+    profile.updated_at = datetime.utcnow()
     db.commit()
     db.refresh(profile)
+    if user_updated:
+        db.refresh(current_user)
     
-    resumes_formatted = [format_resume_response(r) for r in profile.resumes]
-    return CandidateProfileResponse(
-        id=profile.id,
-        user_id=profile.user_id,
-        phone=profile.phone,
-        headline=profile.headline,
-        skills=profile.skills,
-        experience_years=profile.experience_years,
-        resumes=resumes_formatted
-    )
+    return format_candidate_profile_response(profile, current_user)
 
 @app.post("/api/candidate/resume/upload", response_model=ResumeResponse)
 async def upload_resume(
@@ -469,11 +681,61 @@ async def upload_resume(
             await out_file.write(content)
 
     parse_result = parse_resume_document(file_path, file_ext, profile.headline or "")
-    
-    if not profile.skills and parse_result["parsed_data"].get("skills"):
-        profile.skills = ", ".join(parse_result["parsed_data"]["skills"])
-    if profile.experience_years == 0 and parse_result["parsed_data"].get("work_experience", {}).get("estimated_years"):
-        profile.experience_years = parse_result["parsed_data"]["work_experience"]["estimated_years"]
+    extracted_data = parse_result.get("parsed_data", {})
+
+    # Auto-populate profile fields with extracted information without overwriting existing manually set fields with empty/missing values
+    # 1. Name & Email on User model
+    if extracted_data.get("name") and (not current_user.full_name or current_user.full_name in ["Candidate", "Alex Chen"] or not current_user.full_name.strip()):
+        current_user.full_name = extracted_data["name"]
+    if extracted_data.get("email") and not current_user.email:
+        current_user.email = extracted_data["email"].lower()
+
+    # 2. Phone
+    if extracted_data.get("phone") and (not profile.phone or not profile.phone.strip()):
+        profile.phone = extracted_data["phone"]
+
+    # 3. Headline
+    if extracted_data.get("headline") and (not profile.headline or not profile.headline.strip()):
+        profile.headline = extracted_data["headline"]
+
+    # 4. Skills (populate or merge)
+    extracted_skills = extracted_data.get("skills", [])
+    if extracted_skills:
+        if not profile.skills or not profile.skills.strip():
+            profile.skills = ", ".join(extracted_skills)
+        else:
+            # Merge extracted skills with existing manually saved skills preserving both
+            existing_skill_set = set([s.strip().lower() for s in profile.skills.split(",") if s.strip()])
+            to_add = [s for s in extracted_skills if s.lower() not in existing_skill_set]
+            if to_add:
+                profile.skills = f"{profile.skills.strip()}, {', '.join(to_add)}"
+
+    # 5. Experience Years
+    extracted_years = extracted_data.get("work_experience", {}).get("estimated_years")
+    if extracted_years and (profile.experience_years is None or profile.experience_years == 0):
+        profile.experience_years = float(extracted_years)
+
+    # 6. Education
+    extracted_edu = extracted_data.get("education", [])
+    if extracted_edu and (not profile.education or profile.education == "[]"):
+        profile.education = json.dumps(extracted_edu)
+
+    # 7. Experience Details / Roles
+    extracted_roles = extracted_data.get("work_experience", {}).get("roles_and_companies", [])
+    if extracted_roles and (not profile.experience_details or profile.experience_details == "[]"):
+        profile.experience_details = json.dumps(extracted_roles)
+
+    # 8. Projects
+    extracted_projects = extracted_data.get("projects", [])
+    if extracted_projects and (not profile.projects or profile.projects == "[]"):
+        profile.projects = json.dumps(extracted_projects)
+
+    # 9. Certifications
+    extracted_certs = extracted_data.get("certifications", [])
+    if extracted_certs and (not profile.certifications or profile.certifications == "[]"):
+        profile.certifications = json.dumps(extracted_certs)
+
+    profile.updated_at = datetime.utcnow()
 
     resume = Resume(
         candidate_profile_id=profile.id,
@@ -484,12 +746,13 @@ async def upload_resume(
         file_type=file_ext,
         upload_status="Parsed",
         raw_text=parse_result["raw_text"],
-        parsed_data=json.dumps(parse_result["parsed_data"]),
+        parsed_data=json.dumps(extracted_data),
         uploaded_at=datetime.utcnow()
     )
     db.add(resume)
     db.commit()
     db.refresh(resume)
+    db.refresh(profile)
 
     all_jds = db.query(JobDescription).all()
     for jd in all_jds:
@@ -509,6 +772,52 @@ def get_candidate_interviews(
         .all()
     )
     return [format_interview_response(it, db) for it in interviews]
+
+# ----------------- NOTIFICATION ENDPOINTS -----------------
+
+@app.get("/api/candidate/notifications", response_model=List[NotificationResponse])
+def get_candidate_notifications(
+    current_user: User = Depends(require_candidate),
+    db: Session = Depends(get_db)
+):
+    """Retrieves all notifications for the authenticated candidate ordered newest first"""
+    notifs = (
+        db.query(Notification)
+        .filter(Notification.user_id == current_user.id)
+        .order_by(desc(Notification.created_at))
+        .all()
+    )
+    return [
+        NotificationResponse(
+            id=n.id,
+            user_id=n.user_id,
+            interview_id=n.interview_id,
+            title=n.title,
+            message=n.message,
+            job_role=n.job_role,
+            scheduled_time=n.scheduled_time,
+            interviewer_name=n.interviewer_name,
+            is_read=n.is_read,
+            email_sent=n.email_sent,
+            created_at=n.created_at
+        )
+        for n in notifs
+    ]
+
+@app.post("/api/candidate/notifications/read")
+def mark_notifications_read(
+    req: NotificationMarkReadRequest,
+    current_user: User = Depends(require_candidate),
+    db: Session = Depends(get_db)
+):
+    """Marks one or more notifications as read, or all if no IDs provided"""
+    query = db.query(Notification).filter(Notification.user_id == current_user.id)
+    if req.notification_ids:
+        query = query.filter(Notification.id.in_(req.notification_ids))
+    
+    updated_count = query.update({Notification.is_read: 1}, synchronize_session=False)
+    db.commit()
+    return {"status": "success", "updated": updated_count}
 
 # ----------------- INTERVIEWER ENDPOINTS -----------------
 
@@ -539,6 +848,11 @@ def get_all_candidates_with_matches(
                 if match_obj:
                     match_resp = format_match_response(match_obj, target_jd.title)
 
+        edu_list = json.loads(profile.education) if (profile and profile.education) else None
+        exp_list = json.loads(profile.experience_details) if (profile and profile.experience_details) else None
+        proj_list = json.loads(profile.projects) if (profile and profile.projects) else None
+        cert_list = json.loads(profile.certifications) if (profile and profile.certifications) else None
+
         results.append(
             CandidateMatchDetail(
                 id=cand.id,
@@ -549,11 +863,35 @@ def get_all_candidates_with_matches(
                 headline=profile.headline if profile else None,
                 skills=profile.skills if profile else None,
                 experience_years=profile.experience_years if profile else 0.0,
+                education=edu_list,
+                experience_details=exp_list,
+                projects=proj_list,
+                certifications=cert_list,
                 latest_resume=format_resume_response(latest_resume) if latest_resume else None,
                 match_score=match_resp
             )
         )
     return results
+
+@app.get("/api/interviewer/candidates/{candidate_id}", response_model=CandidateProfileResponse)
+def get_candidate_profile_detail(
+    candidate_id: int,
+    current_user: User = Depends(require_interviewer),
+    db: Session = Depends(get_db)
+):
+    """Allows interviewer to view complete candidate profile including all structured sections"""
+    candidate = db.query(User).filter(User.id == candidate_id, User.role == UserRole.CANDIDATE).first()
+    if not candidate:
+        raise HTTPException(status_code=404, detail="Candidate not found")
+    
+    profile = candidate.candidate_profile
+    if not profile:
+        profile = CandidateProfile(user_id=candidate.id)
+        db.add(profile)
+        db.commit()
+        db.refresh(profile)
+
+    return format_candidate_profile_response(profile, candidate)
 
 @app.get("/api/interviewer/job-descriptions", response_model=List[JobDescriptionResponse])
 def get_job_descriptions(
@@ -634,7 +972,43 @@ def create_interview(
     db.commit()
     db.refresh(new_interview)
 
-    # Phase 3: Auto-generate questions on creation
+    # 1. Create In-App Notification for candidate
+    formatted_date_time = new_interview.scheduled_time.strftime("%B %d, %Y at %I:%M %p")
+    notif_msg = (
+        f"You have an upcoming interview '{new_interview.title}' for {new_interview.job_role} "
+        f"scheduled with {current_user.full_name} on {formatted_date_time}."
+    )
+    if new_interview.notes:
+        notif_msg += f" Note: {new_interview.notes}"
+
+    notification = Notification(
+        user_id=candidate.id,
+        interview_id=new_interview.id,
+        title=f"Interview Scheduled: {new_interview.title}",
+        message=notif_msg,
+        job_role=new_interview.job_role,
+        scheduled_time=new_interview.scheduled_time,
+        interviewer_name=current_user.full_name,
+        is_read=0,
+        email_sent=0
+    )
+
+    # 2. Attempt optional Email Notification
+    email_delivered = send_interview_email_notification(
+        candidate_email=candidate.email,
+        candidate_name=candidate.full_name,
+        interview_title=new_interview.title,
+        job_role=new_interview.job_role,
+        scheduled_time=new_interview.scheduled_time,
+        interviewer_name=current_user.full_name
+    )
+    if email_delivered:
+        notification.email_sent = 1
+
+    db.add(notification)
+    db.commit()
+
+    # 3. Phase 3: Auto-generate questions on creation
     cand_resume_parsed = None
     if candidate.candidate_profile and candidate.candidate_profile.resumes:
         latest_r = sorted(candidate.candidate_profile.resumes, key=lambda r: r.uploaded_at, reverse=True)[0]
@@ -819,6 +1193,271 @@ def delete_question(
     db.commit()
     return {"status": "success", "message": "Question deleted successfully"}
 
+# ----------------- PHASE 4: WEBSOCKET SIGNALING & INTERVIEW ROOM -----------------
+
+@app.websocket("/api/ws/interview/{interview_id}")
+async def websocket_interview_signaling(
+    websocket: WebSocket,
+    interview_id: int,
+    token: Optional[str] = Query(None),
+    db: Session = Depends(get_db)
+):
+    """
+    WebSocket endpoint for peer-to-peer WebRTC signaling (offers, answers, ICE candidates),
+    live question synchronization, recording consent alerts, and room management.
+    """
+    # Authenticate via query param token or authorization
+    user = None
+    if token:
+        try:
+            from jose import jwt
+            from app.auth import SECRET_KEY, ALGORITHM
+            payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+            user_identifier = payload.get("sub")
+            if user_identifier:
+                # sub is email in create_access_token
+                user = db.query(User).filter((User.email == user_identifier) | (User.id == str(user_identifier))).first()
+        except Exception as e:
+            print("WS auth exception:", e)
+            user = None
+
+    if not user:
+        await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
+        return
+
+    interview = db.query(Interview).filter(Interview.id == interview_id).first()
+    if not interview or (user.id != interview.interviewer_id and user.id != interview.candidate_id):
+        await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
+        return
+
+    user_name = user.full_name or user.email
+    user_role = user.role.value
+
+    await manager.connect(interview_id, websocket, user.id, user_name, user_role)
+
+    try:
+        while True:
+            data = await websocket.receive_json()
+            msg_type = data.get("type")
+
+            # Route WebRTC signaling and room messages
+            if msg_type in ["offer", "answer", "ice-candidate"]:
+                # Relay WebRTC signaling packets to the peer(s)
+                await manager.broadcast_to_room(interview_id, {
+                    "type": msg_type,
+                    "sender_id": user.id,
+                    "sender_role": user_role,
+                    "data": data.get("data")
+                }, sender_ws=websocket)
+
+            elif msg_type == "question-nav":
+                # Interviewer navigating questions
+                q_idx = data.get("question_index", 0)
+                interview.current_question_index = q_idx
+                db.commit()
+                await manager.broadcast_to_room(interview_id, {
+                    "type": "question-nav",
+                    "question_index": q_idx,
+                    "sender_id": user.id
+                }, sender_ws=websocket)
+
+            elif msg_type == "recording-consent":
+                # Broadcast consent status
+                consent_given = data.get("consent", False)
+                if user.role == UserRole.CANDIDATE:
+                    interview.recording_consent_candidate = 1 if consent_given else 0
+                else:
+                    interview.recording_consent_interviewer = 1 if consent_given else 0
+                db.commit()
+
+                await manager.broadcast_to_room(interview_id, {
+                    "type": "recording-consent",
+                    "user_id": user.id,
+                    "user_role": user_role,
+                    "consent": consent_given
+                })
+
+            elif msg_type == "session-status":
+                # Session status updates (e.g., started, ended)
+                new_status = data.get("status")
+                await manager.broadcast_to_room(interview_id, {
+                    "type": "session-status",
+                    "status": new_status,
+                    "sender_id": user.id
+                })
+
+            elif msg_type == "chat-message":
+                # In-room text chat / notes
+                await manager.broadcast_to_room(interview_id, {
+                    "type": "chat-message",
+                    "sender_id": user.id,
+                    "sender_name": user_name,
+                    "sender_role": user_role,
+                    "text": data.get("text"),
+                    "timestamp": datetime.utcnow().isoformat()
+                })
+
+            elif msg_type == "media-state":
+                # Mic / Camera mute status changes
+                await manager.broadcast_to_room(interview_id, {
+                    "type": "media-state",
+                    "sender_id": user.id,
+                    "audio_enabled": data.get("audio_enabled", True),
+                    "video_enabled": data.get("video_enabled", True)
+                }, sender_ws=websocket)
+
+    except WebSocketDisconnect:
+        manager.disconnect(interview_id, websocket)
+    except Exception as e:
+        print(f"WebSocket error in room {interview_id}: {e}")
+        manager.disconnect(interview_id, websocket)
+
+
+# ----------------- PHASE 4: SESSION & RECORDING REST ENDPOINTS -----------------
+
+@app.put("/api/interviews/{interview_id}/session", response_model=InterviewResponse)
+def update_interview_session(
+    interview_id: int,
+    session_data: InterviewSessionUpdateRequest,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """
+    Updates live session state: start_time, end_time, current_question_index, status, and session_metadata.
+    """
+    interview = db.query(Interview).filter(Interview.id == interview_id).first()
+    if not interview:
+        raise HTTPException(status_code=404, detail="Interview not found")
+
+    if current_user.id != interview.interviewer_id and current_user.id != interview.candidate_id:
+        raise HTTPException(status_code=403, detail="Unauthorized for this interview")
+
+    if session_data.status is not None:
+        status_str = session_data.status.lower()
+        if status_str in ["scheduled", "in_progress", "completed", "cancelled"]:
+            interview.status = InterviewStatus(status_str)
+        else:
+            interview.status = InterviewStatus.SCHEDULED
+
+    if session_data.start_time is not None:
+        interview.start_time = session_data.start_time
+    elif session_data.status and session_data.status.lower() == "in_progress" and not interview.start_time:
+        interview.start_time = datetime.utcnow()
+
+    if session_data.end_time is not None:
+        interview.end_time = session_data.end_time
+    elif session_data.status and session_data.status.lower() in ["completed", "completed"] and not interview.end_time:
+        interview.end_time = datetime.utcnow()
+
+    if session_data.current_question_index is not None:
+        interview.current_question_index = session_data.current_question_index
+
+    if session_data.session_metadata is not None:
+        existing_meta = json.loads(interview.session_metadata) if interview.session_metadata else {}
+        existing_meta.update(session_data.session_metadata)
+        interview.session_metadata = json.dumps(existing_meta)
+
+    db.commit()
+    db.refresh(interview)
+    return format_interview_response(interview, db)
+
+
+@app.post("/api/interviews/{interview_id}/recording/consent", response_model=InterviewResponse)
+def record_interview_consent(
+    interview_id: int,
+    consent_req: RecordingConsentRequest,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Records explicit audio/video recording consent for candidate or interviewer"""
+    interview = db.query(Interview).filter(Interview.id == interview_id).first()
+    if not interview:
+        raise HTTPException(status_code=404, detail="Interview not found")
+
+    if current_user.id == interview.candidate_id:
+        interview.recording_consent_candidate = 1 if consent_req.consent else 0
+    elif current_user.id == interview.interviewer_id:
+        interview.recording_consent_interviewer = 1 if consent_req.consent else 0
+    else:
+        raise HTTPException(status_code=403, detail="Unauthorized")
+
+    db.commit()
+    db.refresh(interview)
+    return format_interview_response(interview, db)
+
+
+@app.post("/api/interviews/{interview_id}/recording", response_model=InterviewResponse)
+async def upload_interview_recording(
+    interview_id: int,
+    file: UploadFile = File(...),
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """
+    Securely uploads and saves interview session video recording.
+    Restricted to interview participants.
+    """
+    interview = db.query(Interview).filter(Interview.id == interview_id).first()
+    if not interview:
+        raise HTTPException(status_code=404, detail="Interview not found")
+
+    if current_user.id != interview.candidate_id and current_user.id != interview.interviewer_id:
+        raise HTTPException(status_code=403, detail="Unauthorized")
+
+    # Generate secure filename
+    ext = os.path.splitext(file.filename)[1] if file.filename else ".webm"
+    if not ext or ext == "":
+        ext = ".webm"
+    filename = f"interview_{interview.id}_{uuid.uuid4().hex[:10]}{ext}"
+    dest_path = os.path.join(RECORDINGS_DIR, filename)
+
+    async with aiofiles.open(dest_path, "wb") as out_file:
+        content = await file.read()
+        await out_file.write(content)
+
+    interview.recording_path = dest_path
+    
+    # Store recording info in metadata
+    meta = json.loads(interview.session_metadata) if interview.session_metadata else {}
+    meta["recording_filename"] = filename
+    meta["recording_size_bytes"] = len(content)
+    meta["recording_uploaded_at"] = datetime.utcnow().isoformat()
+    meta["recording_uploader_id"] = current_user.id
+    interview.session_metadata = json.dumps(meta)
+
+    db.commit()
+    db.refresh(interview)
+    return format_interview_response(interview, db)
+
+
+@app.get("/api/interviews/{interview_id}/recording")
+def download_interview_recording(
+    interview_id: int,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """
+    Streams or downloads recorded interview session.
+    Protected to authorized interview participants.
+    """
+    interview = db.query(Interview).filter(Interview.id == interview_id).first()
+    if not interview:
+        raise HTTPException(status_code=404, detail="Interview not found")
+
+    if current_user.id != interview.candidate_id and current_user.id != interview.interviewer_id:
+        raise HTTPException(status_code=403, detail="Unauthorized access to interview recording")
+
+    if not interview.recording_path or not os.path.exists(interview.recording_path):
+        raise HTTPException(status_code=404, detail="No recording found for this interview")
+
+    return FileResponse(
+        interview.recording_path,
+        media_type="video/webm",
+        filename=f"interview_{interview.id}_recording.webm"
+    )
+
+
 @app.get("/api/health")
 def health_check():
-    return {"status": "ok", "phase": "Phase 3 - AI Question Generation & Management"}
+    return {"status": "ok", "platform": "AI Interview Platform with WebRTC Live Rooms & Profile Sync"}
+
