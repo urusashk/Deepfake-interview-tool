@@ -1126,7 +1126,19 @@ def get_interview_detail(
     if current_user.role == UserRole.INTERVIEWER and interview.interviewer_id != current_user.id:
         raise HTTPException(status_code=403, detail="Access forbidden")
 
-    return format_interview_response(interview, db)
+    formatted = format_interview_response(interview, db)
+    # If the user is a candidate, do not expose upcoming or entire question list.
+    # Return only the current active question if available.
+    if current_user.role == UserRole.CANDIDATE:
+        curr_idx = interview.current_question_index or 0
+        if formatted.questions and len(formatted.questions) > curr_idx:
+            formatted.questions = [formatted.questions[curr_idx]]
+        elif formatted.questions and len(formatted.questions) > 0:
+            formatted.questions = [formatted.questions[0]]
+        else:
+            formatted.questions = []
+
+    return formatted
 
 # ----------------- PHASE 3: QUESTION MANAGEMENT ENDPOINTS -----------------
 
@@ -1307,13 +1319,31 @@ async def websocket_interview_signaling(
                 }, sender_ws=websocket)
 
             elif msg_type == "question-nav":
-                # Interviewer navigating questions
+                # Only Interviewer can navigate questions
+                if user.role != UserRole.INTERVIEWER:
+                    continue
                 q_idx = data.get("question_index", 0)
                 interview.current_question_index = q_idx
                 db.commit()
+
+                # Get question object to send active question directly to candidate
+                curr_q_data = None
+                if interview.questions and len(interview.questions) > q_idx:
+                    sorted_qs = sorted(interview.questions, key=lambda x: x.order_index)
+                    if len(sorted_qs) > q_idx:
+                        target_q = sorted_qs[q_idx]
+                        curr_q_data = {
+                            "id": target_q.id,
+                            "question_text": target_q.question_text,
+                            "category": target_q.category,
+                            "difficulty": target_q.difficulty,
+                            "order_index": target_q.order_index
+                        }
+
                 await manager.broadcast_to_room(interview_id, {
                     "type": "question-nav",
                     "question_index": q_idx,
+                    "question": curr_q_data,
                     "sender_id": user.id
                 }, sender_ws=websocket)
 
@@ -1406,7 +1436,8 @@ def update_interview_session(
         interview.end_time = datetime.utcnow()
 
     if session_data.current_question_index is not None:
-        interview.current_question_index = session_data.current_question_index
+        if current_user.role == UserRole.INTERVIEWER:
+            interview.current_question_index = session_data.current_question_index
 
     if session_data.session_metadata is not None:
         existing_meta = json.loads(interview.session_metadata) if interview.session_metadata else {}
