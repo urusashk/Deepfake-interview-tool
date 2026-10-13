@@ -221,6 +221,17 @@ class FullTranscriptEntry(BaseModel):
     timestamp: str
     question_id: Optional[int] = None
 
+class TranscriptItem(BaseModel):
+    speaker: str # "interviewer" or "candidate"
+    speaker_name: Optional[str] = None
+    text: str
+    timestamp: str
+    question_id: Optional[int] = None
+
+class LoadTranscriptRequest(BaseModel):
+    transcript: List[TranscriptItem]
+    is_sample: bool = True
+
 class InterviewAnalysisResponse(BaseModel):
     id: int
     interview_id: int
@@ -234,6 +245,8 @@ class InterviewAnalysisResponse(BaseModel):
     resume_claims: List[ResumeClaimVerification] = []
     full_transcript: List[FullTranscriptEntry] = []
     behaviour_analysis: Optional[Dict[str, Any]] = None
+    is_sample: Optional[bool] = False
+    sample_label: Optional[str] = None
     created_at: datetime
     updated_at: Optional[datetime] = None
 

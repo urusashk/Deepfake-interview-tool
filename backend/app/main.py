@@ -31,13 +31,18 @@ from app.schemas import (
     InterviewCreate, InterviewResponse, MatchBreakdownResponse, CandidateMatchDetail,
     InterviewQuestionCreate, InterviewQuestionUpdate, InterviewQuestionResponse,
     InterviewSessionUpdateRequest, RecordingConsentRequest,
-    InterviewAnalysisResponse, QuestionAnswerEvaluation, ResumeClaimVerification, FullTranscriptEntry
+    InterviewAnalysisResponse, QuestionAnswerEvaluation, ResumeClaimVerification, FullTranscriptEntry,
+    LoadTranscriptRequest
 )
 from app.ai.resume_parser import parse_resume_document
 from app.ai.jd_analyzer import analyze_job_description
 from app.ai.matcher import match_resume_to_jd
 from app.ai.question_generator import generate_personalized_questions
-from app.ai.analysis_service import run_complete_interview_analysis
+from app.ai.analysis_service import (
+    run_complete_interview_analysis,
+    generate_sample_interview_transcript,
+    transcribe_uploaded_audio_file
+)
 
 # Initialize database schema
 Base.metadata.create_all(bind=engine)
@@ -65,6 +70,9 @@ class ConnectionManager:
         if interview_id not in self.rooms:
             self.rooms[interview_id] = []
         
+        # Evict any stale or existing connection for the same user in this room
+        self.rooms[interview_id] = [p for p in self.rooms[interview_id] if p["user_id"] != user_id]
+
         client_info = {
             "ws": websocket,
             "user_id": user_id,
@@ -508,6 +516,8 @@ def format_analysis_response(an: InterviewAnalysisResult) -> InterviewAnalysisRe
         resume_claims=claims,
         full_transcript=transcript_list,
         behaviour_analysis=behaviour_data,
+        is_sample=bool(getattr(an, "is_sample", False)),
+        sample_label=getattr(an, "sample_label", None),
         created_at=an.created_at,
         updated_at=an.updated_at
     )
@@ -1566,7 +1576,7 @@ def trigger_interview_analysis(
     if current_user.id != interview.candidate_id and current_user.id != interview.interviewer_id:
         raise HTTPException(status_code=403, detail="Unauthorized")
 
-    # Fetch parsed candidate resume & parsed JD
+def _prepare_interview_analysis_context(interview: Interview) -> Dict[str, Any]:
     resume_parsed = None
     resume_raw = ""
     cand_profile_dict = {}
@@ -1584,14 +1594,19 @@ def trigger_interview_analysis(
         if profile.resumes:
             latest_r = sorted(profile.resumes, key=lambda r: r.uploaded_at, reverse=True)[0]
             if latest_r.parsed_data:
-                resume_parsed = json.loads(latest_r.parsed_data)
+                try:
+                    resume_parsed = json.loads(latest_r.parsed_data)
+                except Exception:
+                    resume_parsed = None
             resume_raw = latest_r.raw_text or ""
 
     jd_parsed = None
     if interview.job_description and interview.job_description.parsed_data:
-        jd_parsed = json.loads(interview.job_description.parsed_data)
+        try:
+            jd_parsed = json.loads(interview.job_description.parsed_data)
+        except Exception:
+            jd_parsed = None
 
-    # Format question objects for analysis
     question_payload = [
         {
             "id": q.id,
@@ -1603,57 +1618,93 @@ def trigger_interview_analysis(
         for q in interview.questions
     ]
 
+    return {
+        "candidate_profile": cand_profile_dict,
+        "resume_parsed": resume_parsed,
+        "resume_raw_text": resume_raw,
+        "jd_parsed": jd_parsed,
+        "questions": question_payload,
+        "job_role": interview.job_role,
+        "interviewer_name": interview.interviewer.full_name if interview.interviewer else "Interviewer",
+        "candidate_name": interview.candidate.full_name if interview.candidate else "Candidate"
+    }
+
+def _save_analysis_result(db: Session, interview_id: int, analysis_data: dict) -> InterviewAnalysisResult:
+    analysis_record = db.query(InterviewAnalysisResult).filter(InterviewAnalysisResult.interview_id == interview_id).first()
+    if not analysis_record:
+        analysis_record = InterviewAnalysisResult(
+            interview_id=interview_id,
+            status=analysis_data.get("status", "completed"),
+            overall_relevance_score=analysis_data["overall_relevance_score"],
+            overall_technical_score=analysis_data["overall_technical_score"],
+            overall_completeness_score=analysis_data["overall_completeness_score"],
+            average_score=analysis_data["average_score"],
+            question_evaluations=json.dumps(analysis_data["question_evaluations"]),
+            resume_claims=json.dumps(analysis_data["resume_claims"]),
+            full_transcript=json.dumps(analysis_data["full_transcript"]),
+            behaviour_metrics_json=json.dumps(analysis_data.get("behaviour_analysis", {})),
+            is_sample=1 if analysis_data.get("is_sample") else 0,
+            sample_label=analysis_data.get("sample_label")
+        )
+        db.add(analysis_record)
+    else:
+        analysis_record.status = analysis_data.get("status", "completed")
+        analysis_record.error_message = None
+        analysis_record.overall_relevance_score = analysis_data["overall_relevance_score"]
+        analysis_record.overall_technical_score = analysis_data["overall_technical_score"]
+        analysis_record.overall_completeness_score = analysis_data["overall_completeness_score"]
+        analysis_record.average_score = analysis_data["average_score"]
+        analysis_record.question_evaluations = json.dumps(analysis_data["question_evaluations"])
+        analysis_record.resume_claims = json.dumps(analysis_data["resume_claims"])
+        analysis_record.full_transcript = json.dumps(analysis_data["full_transcript"])
+        analysis_record.behaviour_metrics_json = json.dumps(analysis_data.get("behaviour_analysis", {}))
+        analysis_record.is_sample = 1 if analysis_data.get("is_sample") else 0
+        analysis_record.sample_label = analysis_data.get("sample_label")
+        analysis_record.updated_at = datetime.utcnow()
+
+    db.commit()
+    db.refresh(analysis_record)
+    return analysis_record
+
+@app.post("/api/interviews/{interview_id}/analysis", response_model=InterviewAnalysisResponse)
+def trigger_interview_analysis(
+    interview_id: int,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """
+    Triggers or retries Phase 5 AI Interview Analysis:
+    1. Speech-to-text transcript generation with timestamps
+    2. Question-by-question answer evaluation (relevance, technical accuracy, completeness)
+    3. Resume claim verification (consistent, potential inconsistency, unsupported)
+    """
+    interview = db.query(Interview).filter(Interview.id == interview_id).first()
+    if not interview:
+        raise HTTPException(status_code=404, detail="Interview not found")
+
+    if current_user.id != interview.candidate_id and current_user.id != interview.interviewer_id:
+        raise HTTPException(status_code=403, detail="Unauthorized")
+
+    ctx = _prepare_interview_analysis_context(interview)
+
     try:
-        # Run reusable AI Analysis Engine
         analysis_data = run_complete_interview_analysis(
             interview_id=interview.id,
             recording_path=interview.recording_path,
-            questions=question_payload,
-            candidate_profile=cand_profile_dict,
-            jd_parsed=jd_parsed,
-            resume_parsed=resume_parsed,
-            resume_raw_text=resume_raw,
-            job_role=interview.job_role,
-            interviewer_name=interview.interviewer.full_name if interview.interviewer else "Interviewer",
-            candidate_name=interview.candidate.full_name if interview.candidate else "Candidate"
+            questions=ctx["questions"],
+            candidate_profile=ctx["candidate_profile"],
+            jd_parsed=ctx["jd_parsed"],
+            resume_parsed=ctx["resume_parsed"],
+            resume_raw_text=ctx["resume_raw_text"],
+            job_role=ctx["job_role"],
+            interviewer_name=ctx["interviewer_name"],
+            candidate_name=ctx["candidate_name"]
         )
-
-        # Check existing analysis record or create new
-        analysis_record = db.query(InterviewAnalysisResult).filter(InterviewAnalysisResult.interview_id == interview.id).first()
-        if not analysis_record:
-            analysis_record = InterviewAnalysisResult(
-                interview_id=interview.id,
-                status="completed",
-                overall_relevance_score=analysis_data["overall_relevance_score"],
-                overall_technical_score=analysis_data["overall_technical_score"],
-                overall_completeness_score=analysis_data["overall_completeness_score"],
-                average_score=analysis_data["average_score"],
-                question_evaluations=json.dumps(analysis_data["question_evaluations"]),
-                resume_claims=json.dumps(analysis_data["resume_claims"]),
-                full_transcript=json.dumps(analysis_data["full_transcript"]),
-                behaviour_metrics_json=json.dumps(analysis_data.get("behaviour_analysis", {}))
-            )
-            db.add(analysis_record)
-        else:
-            analysis_record.status = "completed"
-            analysis_record.error_message = None
-            analysis_record.overall_relevance_score = analysis_data["overall_relevance_score"]
-            analysis_record.overall_technical_score = analysis_data["overall_technical_score"]
-            analysis_record.overall_completeness_score = analysis_data["overall_completeness_score"]
-            analysis_record.average_score = analysis_data["average_score"]
-            analysis_record.question_evaluations = json.dumps(analysis_data["question_evaluations"])
-            analysis_record.resume_claims = json.dumps(analysis_data["resume_claims"])
-            analysis_record.full_transcript = json.dumps(analysis_data["full_transcript"])
-            analysis_record.behaviour_metrics_json = json.dumps(analysis_data.get("behaviour_analysis", {}))
-            analysis_record.updated_at = datetime.utcnow()
-
-        db.commit()
-        db.refresh(analysis_record)
+        analysis_record = _save_analysis_result(db, interview.id, analysis_data)
         return format_analysis_response(analysis_record)
 
     except Exception as e:
         db.rollback()
-        # Save failure state to allow retry
         analysis_record = db.query(InterviewAnalysisResult).filter(InterviewAnalysisResult.interview_id == interview.id).first()
         if not analysis_record:
             analysis_record = InterviewAnalysisResult(
@@ -1676,6 +1727,145 @@ def trigger_interview_analysis(
         db.commit()
         db.refresh(analysis_record)
         return format_analysis_response(analysis_record)
+
+
+@app.get("/api/interviews/{interview_id}/sample-transcript")
+def get_sample_transcript_endpoint(
+    interview_id: int,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """
+    Generates a realistic 5-7 turn sample transcript grounded in candidate profile, resume,
+    job description, and interview questions. Clearly labeled as DEMO DATA.
+    """
+    interview = db.query(Interview).filter(Interview.id == interview_id).first()
+    if not interview:
+        raise HTTPException(status_code=404, detail="Interview not found")
+    if current_user.id != interview.candidate_id and current_user.id != interview.interviewer_id:
+        raise HTTPException(status_code=403, detail="Unauthorized")
+
+    ctx = _prepare_interview_analysis_context(interview)
+    sample_transcript = generate_sample_interview_transcript(
+        questions=ctx["questions"],
+        resume_parsed=ctx["resume_parsed"],
+        resume_raw_text=ctx["resume_raw_text"],
+        candidate_name=ctx["candidate_name"],
+        interviewer_name=ctx["interviewer_name"]
+    )
+
+    return {
+        "interview_id": interview.id,
+        "is_sample": True,
+        "sample_label": "DEMO DATA - Sample Candidate Interview Transcript",
+        "transcript": sample_transcript
+    }
+
+
+@app.post("/api/interviews/{interview_id}/load-transcript", response_model=InterviewAnalysisResponse)
+def load_transcript_and_analyze(
+    interview_id: int,
+    payload: LoadTranscriptRequest,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """
+    Loads a transcript (sample DEMO DATA or custom reviewed) and runs the complete AI analysis pipeline:
+    answer evaluation (relevance, technical accuracy, completeness) and resume claim verification.
+    """
+    interview = db.query(Interview).filter(Interview.id == interview_id).first()
+    if not interview:
+        raise HTTPException(status_code=404, detail="Interview not found")
+    if current_user.id != interview.candidate_id and current_user.id != interview.interviewer_id:
+        raise HTTPException(status_code=403, detail="Unauthorized")
+
+    ctx = _prepare_interview_analysis_context(interview)
+    custom_transcript = [t.dict() for t in payload.transcript] if payload.transcript else None
+
+    try:
+        analysis_data = run_complete_interview_analysis(
+            interview_id=interview.id,
+            recording_path=interview.recording_path,
+            questions=ctx["questions"],
+            candidate_profile=ctx["candidate_profile"],
+            jd_parsed=ctx["jd_parsed"],
+            resume_parsed=ctx["resume_parsed"],
+            resume_raw_text=ctx["resume_raw_text"],
+            job_role=ctx["job_role"],
+            interviewer_name=ctx["interviewer_name"],
+            candidate_name=ctx["candidate_name"],
+            custom_transcript=custom_transcript,
+            is_sample=payload.is_sample
+        )
+        record = _save_analysis_result(db, interview.id, analysis_data)
+        return format_analysis_response(record)
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=f"AI Analysis failed: {str(e)}")
+
+
+@app.post("/api/interviews/{interview_id}/upload-audio", response_model=InterviewAnalysisResponse)
+async def upload_interview_audio(
+    interview_id: int,
+    file: UploadFile = File(...),
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """
+    Uploads real interview audio recording (.wav, .mp3, .m4a, .webm, .ogg),
+    performs speech-to-text transcription, and runs answer evaluation & resume verification.
+    """
+    interview = db.query(Interview).filter(Interview.id == interview_id).first()
+    if not interview:
+        raise HTTPException(status_code=404, detail="Interview not found")
+    if current_user.id != interview.candidate_id and current_user.id != interview.interviewer_id:
+        raise HTTPException(status_code=403, detail="Unauthorized")
+
+    allowed_exts = {".wav", ".mp3", ".m4a", ".webm", ".ogg", ".aac", ".flac"}
+    file_ext = os.path.splitext(file.filename)[1].lower() if file.filename else ""
+    if file_ext not in allowed_exts:
+        raise HTTPException(status_code=400, detail=f"Unsupported audio format '{file_ext}'. Supported formats: {sorted(list(allowed_exts))}")
+
+    saved_filename = f"audio_{interview.id}_{uuid.uuid4().hex[:8]}{file_ext}"
+    dest_path = os.path.join(RECORDINGS_DIR, saved_filename)
+
+    async with aiofiles.open(dest_path, "wb") as out_f:
+        while chunk := await file.read(1024 * 1024):
+            await out_f.write(chunk)
+
+    interview.recording_path = dest_path
+    db.commit()
+
+    ctx = _prepare_interview_analysis_context(interview)
+
+    # Transcribe uploaded audio
+    transcript_segments = transcribe_uploaded_audio_file(
+        audio_path=dest_path,
+        questions=ctx["questions"],
+        interviewer_name=ctx["interviewer_name"],
+        candidate_name=ctx["candidate_name"]
+    )
+
+    try:
+        analysis_data = run_complete_interview_analysis(
+            interview_id=interview.id,
+            recording_path=dest_path,
+            questions=ctx["questions"],
+            candidate_profile=ctx["candidate_profile"],
+            jd_parsed=ctx["jd_parsed"],
+            resume_parsed=ctx["resume_parsed"],
+            resume_raw_text=ctx["resume_raw_text"],
+            job_role=ctx["job_role"],
+            interviewer_name=ctx["interviewer_name"],
+            candidate_name=ctx["candidate_name"],
+            custom_transcript=transcript_segments,
+            is_sample=False
+        )
+        record = _save_analysis_result(db, interview.id, analysis_data)
+        return format_analysis_response(record)
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=f"Audio analysis failed: {str(e)}")
 
 
 @app.get("/api/interviews/{interview_id}/analysis", response_model=InterviewAnalysisResponse)

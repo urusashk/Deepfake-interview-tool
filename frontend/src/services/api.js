@@ -75,11 +75,19 @@ export const api = {
   },
   getCandidateInterviews: () => apiRequest('/candidate/interviews'),
 
+  // Notifications (Candidate)
+  getNotifications: () => apiRequest('/candidate/notifications'),
+  markNotificationsRead: (notificationIds = null) => apiRequest('/candidate/notifications/read', {
+    method: 'POST',
+    body: JSON.stringify({ notification_ids: notificationIds }),
+  }),
+
   // Interviewer
   getCandidates: (jobDescriptionId) => {
     const query = jobDescriptionId ? `?job_description_id=${jobDescriptionId}` : '';
     return apiRequest(`/interviewer/candidates${query}`);
   },
+  getCandidateDetail: (candidateId) => apiRequest(`/interviewer/candidates/${candidateId}`),
   getJobDescriptions: () => apiRequest('/interviewer/job-descriptions'),
   createJobDescription: (payload) => apiRequest('/interviewer/job-descriptions', {
     method: 'POST',
@@ -107,4 +115,45 @@ export const api = {
   deleteQuestion: (questionId) => apiRequest(`/interviews/questions/${questionId}`, {
     method: 'DELETE',
   }),
+
+  // Phase 4 Live Room & Recording
+  updateInterviewSession: (interviewId, payload) => apiRequest(`/interviews/${interviewId}/session`, {
+    method: 'PUT',
+    body: JSON.stringify(payload),
+  }),
+  setRecordingConsent: (interviewId, consent) => apiRequest(`/interviews/${interviewId}/recording/consent`, {
+    method: 'POST',
+    body: JSON.stringify({ consent }),
+  }),
+  uploadRecording: (interviewId, blob, filename = 'recording.webm') => {
+    const formData = new FormData();
+    formData.append('file', blob, filename);
+    return apiRequest(`/interviews/${interviewId}/recording`, {
+      method: 'POST',
+      body: formData,
+    });
+  },
+  getRecordingUrl: (interviewId) => `${API_BASE_URL}/interviews/${interviewId}/recording`,
+
+  // Phase 5 Speech-to-Text & AI Analysis
+  getInterviewAnalysis: (interviewId) => apiRequest(`/interviews/${interviewId}/analysis`),
+  triggerInterviewAnalysis: (interviewId) => apiRequest(`/interviews/${interviewId}/analysis`, {
+    method: 'POST',
+  }),
+  getSampleTranscript: (interviewId) => apiRequest(`/interviews/${interviewId}/sample-transcript`),
+  loadTranscriptAndAnalyze: (interviewId, payload) => apiRequest(`/interviews/${interviewId}/load-transcript`, {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  }),
+  uploadInterviewAudio: (interviewId, file) => {
+    const formData = new FormData();
+    formData.append('file', file);
+    return apiRequest(`/interviews/${interviewId}/upload-audio`, {
+      method: 'POST',
+      body: formData,
+    });
+  },
 };
+
+
+

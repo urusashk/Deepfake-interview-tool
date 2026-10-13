@@ -25,14 +25,20 @@ export default function AuthModal({ initialMode = 'login', defaultRole = 'candid
         res = await api.register({ email, password, full_name: fullName, role });
       }
 
-      setSession(res.access_token, {
+      const userSession = {
         id: res.user_id,
+        user_id: res.user_id,
         email: res.email,
         full_name: res.full_name,
         role: res.role,
-      });
+      };
 
-      onSuccess(res);
+      setSession(res.access_token, userSession);
+
+      onSuccess({
+        ...res,
+        ...userSession,
+      });
     } catch (err) {
       setError(err.message || 'Authentication failed');
     } finally {

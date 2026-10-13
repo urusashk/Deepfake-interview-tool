@@ -218,6 +218,10 @@ class InterviewAnalysisResult(Base):
     # Phase 6: Video and Audio Behaviour Analysis metrics & timeline (JSON string)
     behaviour_metrics_json = Column(Text, nullable=True)
 
+    # Demo / Sample Data Tracking
+    is_sample = Column(Integer, default=0) # 0 = real/audio, 1 = sample demo data
+    sample_label = Column(String(100), nullable=True)
+
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 

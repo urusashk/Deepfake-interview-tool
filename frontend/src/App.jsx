@@ -22,7 +22,12 @@ export default function App() {
   };
 
   const handleAuthSuccess = (userData) => {
-    setCurrentUser(userData);
+    const userObj = {
+      ...userData,
+      id: userData.id || userData.user_id,
+      user_id: userData.id || userData.user_id,
+    };
+    setCurrentUser(userObj);
     setAuthModalConfig(null);
   };
 
@@ -38,7 +43,7 @@ export default function App() {
         <div className="brand-logo" onClick={() => !currentUser && setAuthModalConfig(null)}>
           <span style={{ color: '#2563eb', fontSize: '1.4rem' }}>✦</span>
           <span>IntervAI</span>
-          <span className="brand-badge">Phase 1</span>
+          <span className="brand-badge">Phase 6 Behaviour AI</span>
         </div>
 
         <div className="nav-actions">

@@ -1,9 +1,13 @@
 import React, { useState, useEffect } from 'react';
 import { api } from '../services/api';
 import InterviewDetailModal from './InterviewDetailModal';
+import InterviewRoom from './InterviewRoom';
+import InterviewAnalysisModal from './InterviewAnalysisModal';
 
 export default function InterviewerDashboard({ user }) {
   const [activeTab, setActiveTab] = useState('interviews'); // 'interviews', 'create-interview', 'job-descriptions', 'candidates'
+  const [activeInterviewRoomId, setActiveInterviewRoomId] = useState(null);
+  const [selectedAnalysisInterviewId, setSelectedAnalysisInterviewId] = useState(null);
   const [interviews, setInterviews] = useState([]);
   const [candidates, setCandidates] = useState([]);
   const [jobDescriptions, setJobDescriptions] = useState([]);
@@ -16,6 +20,9 @@ export default function InterviewerDashboard({ user }) {
 
   // Selected Interview for Question Prep Modal (Phase 3)
   const [selectedInterviewId, setSelectedInterviewId] = useState(null);
+
+  // Selected Candidate for Detailed Profile View Modal
+  const [viewingCandidateProfile, setViewingCandidateProfile] = useState(null);
 
   // Create Interview Form State
   const [interviewTitle, setInterviewTitle] = useState('');
@@ -52,12 +59,16 @@ export default function InterviewerDashboard({ user }) {
       setJobDescriptions(jdsData);
 
       // Default candidate and JD selections if available
-      if (candidatesData.length > 0 && !selectedCandidateId) {
-        setSelectedCandidateId(candidatesData[0].id.toString());
+      if (candidatesData.length > 0) {
+        if (!selectedCandidateId || !candidatesData.some(c => c.id.toString() === selectedCandidateId)) {
+          setSelectedCandidateId(candidatesData[0].id.toString());
+        }
       }
       if (jdsData.length > 0 && !selectedJdId) {
         setSelectedJdId(jdsData[0].id.toString());
-        setJobRole(jdsData[0].title);
+        if (!jobRole) {
+          setJobRole(jdsData[0].title);
+        }
       }
       if (jdsData.length > 0 && !filterJdId) {
         setFilterJdId(jdsData[0].id.toString());
@@ -90,6 +101,9 @@ export default function InterviewerDashboard({ user }) {
       setError('');
       setSuccessMsg('');
 
+      const targetCand = candidates.find(c => c.id.toString() === selectedCandidateId);
+      const candDisplayName = targetCand ? targetCand.full_name : 'the candidate';
+
       const created = await api.createInterview({
         title: interviewTitle || `${jobRole} - Technical Round`,
         job_role: jobRole || 'Software Engineer',
@@ -99,7 +113,7 @@ export default function InterviewerDashboard({ user }) {
         notes: interviewNotes,
       });
 
-      setSuccessMsg('Interview scheduled successfully! AI questions have been generated.');
+      setSuccessMsg(`Interview scheduled successfully! Notification sent to ${candDisplayName} and AI questions generated.`);
       setInterviewTitle('');
       setInterviewNotes('');
       setScheduledTime('');
@@ -110,7 +124,7 @@ export default function InterviewerDashboard({ user }) {
       setInterviews(updatedInterviews);
       setSelectedInterviewId(created.id);
     } catch (err) {
-      setError(err.message || 'Failed to create interview');
+      setError(err.message || 'Failed to schedule interview');
     } finally {
       setCreatingInterview(false);
     }
@@ -149,6 +163,25 @@ export default function InterviewerDashboard({ user }) {
     }
   };
 
+  const selectedCandidateForInterview = candidates.find(c => c.id.toString() === selectedCandidateId);
+
+  if (activeInterviewRoomId) {
+    return (
+      <InterviewRoom
+        interviewId={activeInterviewRoomId}
+        user={user}
+        onLeave={() => {
+          setActiveInterviewRoomId(null);
+          loadDashboardData();
+        }}
+        onInterviewCompleted={() => {
+          setActiveInterviewRoomId(null);
+          loadDashboardData();
+        }}
+      />
+    );
+  }
+
   return (
     <div className="dashboard-layout">
       {/* Sidebar */}
@@ -177,7 +210,7 @@ export default function InterviewerDashboard({ user }) {
               className={`nav-item ${activeTab === 'create-interview' ? 'active' : ''}`}
               onClick={() => setActiveTab('create-interview')}
             >
-              <span>➕</span> Create Interview
+              <span>➕</span> Schedule Interview
             </button>
             <button
               className={`nav-item ${activeTab === 'job-descriptions' ? 'active' : ''}`}
@@ -189,7 +222,7 @@ export default function InterviewerDashboard({ user }) {
         </div>
 
         <div style={{ fontSize: '0.75rem', color: '#94a3b8', padding: '0 0.5rem' }}>
-          Phase 3 AI Question Prep
+          Phase 4 Live Video Room
         </div>
       </aside>
 
@@ -209,8 +242,8 @@ export default function InterviewerDashboard({ user }) {
               <div className="card">
                 <div className="card-header">
                   <div>
-                    <h2 className="card-title">Scheduled Interviews & Question Preparation</h2>
-                    <p className="card-description">View, edit, or regenerate personalized questions for every session</p>
+                    <h2 className="card-title">Scheduled Interviews & Live Video Rooms</h2>
+                    <p className="card-description">Enter live video room, manage questions, and review recordings</p>
                   </div>
                   <button
                     className="btn btn-primary btn-sm"
@@ -224,7 +257,7 @@ export default function InterviewerDashboard({ user }) {
                   <div className="empty-state">
                     <span style={{ fontSize: '2rem' }}>📅</span>
                     <div className="empty-state-title">No interviews scheduled yet</div>
-                    <div className="empty-state-desc">Click "+ Schedule New Interview" to arrange a session.</div>
+                    <div className="empty-state-desc">Click "+ Schedule New Interview" to arrange a session and notify candidate.</div>
                   </div>
                 ) : (
                   <div className="table-container">
@@ -234,10 +267,10 @@ export default function InterviewerDashboard({ user }) {
                           <th>Interview Title</th>
                           <th>Candidate</th>
                           <th>Role / JD</th>
-                          <th>Resume Match</th>
+                          <th>Status</th>
                           <th>Questions</th>
                           <th>Scheduled Time</th>
-                          <th>Action</th>
+                          <th>Action & Room</th>
                         </tr>
                       </thead>
                       <tbody>
@@ -253,13 +286,15 @@ export default function InterviewerDashboard({ user }) {
                               <div style={{ fontSize: '0.75rem', color: '#64748b' }}>{i.job_description_title || 'General'}</div>
                             </td>
                             <td>
-                              {i.match_score ? (
-                                <div style={{ display: 'inline-flex', alignItems: 'center', gap: '0.4rem', background: '#f0fdf4', color: '#15803d', padding: '3px 8px', borderRadius: '6px', fontWeight: 600, fontSize: '0.825rem', border: '1px solid #bbf7d0' }}>
-                                  <span>{Math.round(i.match_score.overall_match_score)}%</span>
-                                </div>
-                              ) : (
-                                <span style={{ fontSize: '0.75rem', color: '#94a3b8' }}>Pending resume</span>
-                              )}
+                              <span className={`badge ${
+                                i.status === 'Completed' || i.status === 'completed'
+                                  ? 'badge-completed'
+                                  : i.status === 'in_progress'
+                                  ? 'badge-role'
+                                  : 'badge-scheduled'
+                              }`}>
+                                {i.status === 'in_progress' ? '● In Progress' : i.status}
+                              </span>
                             </td>
                             <td>
                               <span className="badge badge-role">
@@ -268,12 +303,46 @@ export default function InterviewerDashboard({ user }) {
                             </td>
                             <td>{new Date(i.scheduled_time).toLocaleString()}</td>
                             <td>
-                              <button
-                                className="btn btn-outline-primary btn-sm"
-                                onClick={() => setSelectedInterviewId(i.id)}
-                              >
-                                View / Edit Questions
-                              </button>
+                              <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', flexWrap: 'wrap' }}>
+                                {i.status !== 'Completed' && i.status !== 'completed' && (
+                                  <button
+                                    className="btn btn-primary btn-sm"
+                                    style={{ display: 'inline-flex', alignItems: 'center', gap: '0.3rem', fontWeight: 600 }}
+                                    onClick={() => setActiveInterviewRoomId(i.id)}
+                                  >
+                                    <span>🎥</span> Join Room
+                                  </button>
+                                )}
+
+                                <button
+                                  className="btn btn-sm"
+                                  style={{ display: 'inline-flex', alignItems: 'center', gap: '0.3rem', fontWeight: 600, background: '#4f46e5', color: '#ffffff', border: '1px solid #4338ca' }}
+                                  onClick={() => setSelectedAnalysisInterviewId(i.id)}
+                                  title="View AI Evaluation & Analysis Report"
+                                >
+                                  <span>🧠</span> AI Report
+                                </button>
+
+                                {i.recording_path && (
+                                  <a
+                                    href={api.getRecordingUrl(i.id)}
+                                    target="_blank"
+                                    rel="noreferrer"
+                                    className="btn btn-secondary btn-sm"
+                                    style={{ display: 'inline-flex', alignItems: 'center', gap: '0.3rem' }}
+                                  >
+                                    <span>📼</span> Recording
+                                  </a>
+                                )}
+
+                                <button
+                                  className="btn btn-secondary btn-sm"
+                                  onClick={() => setSelectedInterviewId(i.id)}
+                                  title="View / Edit Questions"
+                                >
+                                  ✏️ Questions
+                                </button>
+                              </div>
                             </td>
                           </tr>
                         ))}
@@ -290,8 +359,8 @@ export default function InterviewerDashboard({ user }) {
                 <div className="card">
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '1rem', marginBottom: '1.25rem' }}>
                     <div>
-                      <h2 className="card-title">Candidate Evaluation & Resume Matching</h2>
-                      <p className="card-description">Compare candidates against selected job description using semantic AI analysis</p>
+                      <h2 className="card-title">Candidate Evaluation & Synchronized Profiles</h2>
+                      <p className="card-description">Live view of candidates with auto-populated profiles and semantic AI JD match</p>
                     </div>
 
                     <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
@@ -352,6 +421,20 @@ export default function InterviewerDashboard({ user }) {
                             )}
                           </div>
 
+                          {/* Candidate Skills Badges */}
+                          {cand.skills && (
+                            <div style={{ marginBottom: '1rem' }}>
+                              <div style={{ fontSize: '0.8rem', fontWeight: 600, color: '#475569', marginBottom: '0.35rem' }}>Skills:</div>
+                              <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.4rem' }}>
+                                {cand.skills.split(',').map((s, idx) => (
+                                  <span key={idx} className="badge badge-cat">
+                                    {s.trim()}
+                                  </span>
+                                ))}
+                              </div>
+                            </div>
+                          )}
+
                           {/* Candidate Match Breakdown Card */}
                           {cand.match_score && (
                             <div style={{ background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: '8px', padding: '1.25rem', marginTop: '1rem' }}>
@@ -404,6 +487,14 @@ export default function InterviewerDashboard({ user }) {
                           {/* Actions */}
                           <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: '1rem', gap: '0.75rem' }}>
                             <button
+                              type="button"
+                              className="btn btn-secondary btn-sm"
+                              onClick={() => setViewingCandidateProfile(cand)}
+                            >
+                              View Full Profile
+                            </button>
+                            <button
+                              type="button"
                               className="btn btn-outline-primary btn-sm"
                               onClick={() => {
                                 setSelectedCandidateId(cand.id.toString());
@@ -411,7 +502,7 @@ export default function InterviewerDashboard({ user }) {
                                 setActiveTab('create-interview');
                               }}
                             >
-                              Schedule Interview with Candidate
+                              Schedule Interview
                             </button>
                           </div>
                         </div>
@@ -427,8 +518,8 @@ export default function InterviewerDashboard({ user }) {
               <div className="card" style={{ maxWidth: '750px' }}>
                 <div className="card-header">
                   <div>
-                    <h2 className="card-title">Create & Schedule Interview</h2>
-                    <p className="card-description">Assign candidates, select roles, and generate AI personalized questions automatically</p>
+                    <h2 className="card-title">Schedule Interview & Notify Candidate</h2>
+                    <p className="card-description">Assign candidates, select roles, generate AI questions, and trigger in-app & email candidate notifications</p>
                   </div>
                 </div>
 
@@ -438,6 +529,24 @@ export default function InterviewerDashboard({ user }) {
                   </div>
                 ) : (
                   <form onSubmit={handleCreateInterview}>
+                    {/* Selected Candidate Info Card Preview */}
+                    {selectedCandidateForInterview && (
+                      <div style={{ background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: '8px', padding: '1rem', marginBottom: '1.25rem' }}>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.25rem' }}>
+                          <span style={{ fontWeight: 600, color: '#0f172a' }}>{selectedCandidateForInterview.full_name}</span>
+                          <span className="badge badge-role">{selectedCandidateForInterview.experience_years} Yrs Exp</span>
+                        </div>
+                        <div style={{ fontSize: '0.8rem', color: '#64748b' }}>
+                          {selectedCandidateForInterview.email} {selectedCandidateForInterview.phone && `• ${selectedCandidateForInterview.phone}`}
+                        </div>
+                        {selectedCandidateForInterview.skills && (
+                          <div style={{ fontSize: '0.8rem', color: '#334155', marginTop: '0.35rem' }}>
+                            <strong>Skills:</strong> {selectedCandidateForInterview.skills}
+                          </div>
+                        )}
+                      </div>
+                    )}
+
                     <div className="form-group">
                       <label className="form-label">Interview Title</label>
                       <input
@@ -510,7 +619,7 @@ export default function InterviewerDashboard({ user }) {
                     </div>
 
                     <div className="form-group">
-                      <label className="form-label">Interview Instructions / Notes</label>
+                      <label className="form-label">Interview Instructions / Notes (Sent to candidate)</label>
                       <textarea
                         placeholder="Provide details or questions focus for this session..."
                         className="form-textarea"
@@ -532,7 +641,7 @@ export default function InterviewerDashboard({ user }) {
                         className="btn btn-primary"
                         disabled={creatingInterview}
                       >
-                        {creatingInterview ? 'Scheduling & Generating Questions...' : 'Schedule Interview'}
+                        {creatingInterview ? 'Scheduling & Notifying...' : 'Schedule & Notify Candidate'}
                       </button>
                     </div>
                   </form>
@@ -673,6 +782,145 @@ export default function InterviewerDashboard({ user }) {
         )}
       </main>
 
+      {/* Candidate Full Profile Detail Modal */}
+      {viewingCandidateProfile && (
+        <div style={{
+          position: 'fixed',
+          inset: 0,
+          backgroundColor: 'rgba(15, 23, 42, 0.6)',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          zIndex: 1000,
+          padding: '1.5rem',
+          overflowY: 'auto'
+        }}>
+          <div className="card" style={{ width: '100%', maxWidth: '750px', maxHeight: '90vh', overflowY: 'auto', position: 'relative' }}>
+            <button
+              onClick={() => setViewingCandidateProfile(null)}
+              style={{
+                position: 'absolute',
+                top: '1.25rem',
+                right: '1.25rem',
+                background: 'transparent',
+                border: 'none',
+                fontSize: '1.25rem',
+                cursor: 'pointer',
+                color: '#64748b'
+              }}
+            >
+              ✕
+            </button>
+
+            <div style={{ marginBottom: '1.25rem' }}>
+              <h2 style={{ fontSize: '1.35rem', color: '#0f172a' }}>{viewingCandidateProfile.full_name}</h2>
+              <p style={{ fontSize: '0.875rem', color: '#64748b' }}>
+                {viewingCandidateProfile.email} {viewingCandidateProfile.phone && `• ${viewingCandidateProfile.phone}`}
+              </p>
+              {viewingCandidateProfile.headline && (
+                <p style={{ fontSize: '0.95rem', color: '#2563eb', fontWeight: 500, marginTop: '0.25rem' }}>
+                  {viewingCandidateProfile.headline}
+                </p>
+              )}
+            </div>
+
+            {/* Skills */}
+            {viewingCandidateProfile.skills && (
+              <div style={{ marginBottom: '1.25rem' }}>
+                <h4 style={{ fontSize: '0.9rem', fontWeight: 600, marginBottom: '0.4rem' }}>Skills & Competencies</h4>
+                <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.4rem' }}>
+                  {viewingCandidateProfile.skills.split(',').map((s, idx) => (
+                    <span key={idx} className="badge badge-cat">
+                      {s.trim()}
+                    </span>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* Work Experience */}
+            {viewingCandidateProfile.experience_details && viewingCandidateProfile.experience_details.length > 0 && (
+              <div style={{ marginBottom: '1.25rem' }}>
+                <h4 style={{ fontSize: '0.9rem', fontWeight: 600, marginBottom: '0.4rem' }}>
+                  Work Experience ({viewingCandidateProfile.experience_years} Years)
+                </h4>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+                  {viewingCandidateProfile.experience_details.map((exp, idx) => (
+                    <div key={idx} style={{ background: '#f8fafc', padding: '0.6rem 0.85rem', borderRadius: '6px', border: '1px solid #e2e8f0', fontSize: '0.85rem' }}>
+                      💼 {exp}
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* Education */}
+            {viewingCandidateProfile.education && viewingCandidateProfile.education.length > 0 && (
+              <div style={{ marginBottom: '1.25rem' }}>
+                <h4 style={{ fontSize: '0.9rem', fontWeight: 600, marginBottom: '0.4rem' }}>Education & Degrees</h4>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+                  {viewingCandidateProfile.education.map((edu, idx) => (
+                    <div key={idx} style={{ background: '#f8fafc', padding: '0.6rem 0.85rem', borderRadius: '6px', border: '1px solid #e2e8f0', fontSize: '0.85rem' }}>
+                      🎓 <strong>{edu.degree}</strong> {edu.raw_context && `— ${edu.raw_context}`}
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* Projects */}
+            {viewingCandidateProfile.projects && viewingCandidateProfile.projects.length > 0 && (
+              <div style={{ marginBottom: '1.25rem' }}>
+                <h4 style={{ fontSize: '0.9rem', fontWeight: 600, marginBottom: '0.4rem' }}>Projects</h4>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+                  {viewingCandidateProfile.projects.map((proj, idx) => (
+                    <div key={idx} style={{ background: '#f8fafc', padding: '0.6rem 0.85rem', borderRadius: '6px', border: '1px solid #e2e8f0', fontSize: '0.85rem' }}>
+                      🚀 <strong>{proj.title}</strong>
+                      {proj.description && <p style={{ fontSize: '0.8rem', color: '#475569', marginTop: '0.2rem' }}>{proj.description}</p>}
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* Certifications */}
+            {viewingCandidateProfile.certifications && viewingCandidateProfile.certifications.length > 0 && (
+              <div style={{ marginBottom: '1.25rem' }}>
+                <h4 style={{ fontSize: '0.9rem', fontWeight: 600, marginBottom: '0.4rem' }}>Certifications</h4>
+                <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.5rem' }}>
+                  {viewingCandidateProfile.certifications.map((cert, idx) => (
+                    <span key={idx} style={{ background: '#f0fdf4', color: '#166534', padding: '4px 10px', borderRadius: '6px', fontSize: '0.8rem', border: '1px solid #bbf7d0' }}>
+                      📜 {cert}
+                    </span>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.75rem', marginTop: '1.5rem', paddingTop: '1rem', borderTop: '1px solid #e2e8f0' }}>
+              <button
+                type="button"
+                className="btn btn-secondary"
+                onClick={() => setViewingCandidateProfile(null)}
+              >
+                Close
+              </button>
+              <button
+                type="button"
+                className="btn btn-primary"
+                onClick={() => {
+                  setSelectedCandidateId(viewingCandidateProfile.id.toString());
+                  setViewingCandidateProfile(null);
+                  setActiveTab('create-interview');
+                }}
+              >
+                Schedule Interview with Candidate
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Phase 3 Interview Detail & Question Prep Modal */}
       {selectedInterviewId && (
         <InterviewDetailModal
@@ -683,6 +931,18 @@ export default function InterviewerDashboard({ user }) {
           }}
         />
       )}
+
+      {/* Phase 5 AI Interview Analysis & Evaluation Modal */}
+      {selectedAnalysisInterviewId && (
+        <InterviewAnalysisModal
+          interviewId={selectedAnalysisInterviewId}
+          onClose={() => {
+            setSelectedAnalysisInterviewId(null);
+            loadDashboardData();
+          }}
+        />
+      )}
     </div>
   );
 }
+
