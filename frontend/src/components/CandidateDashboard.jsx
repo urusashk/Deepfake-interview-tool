@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { api } from '../services/api';
 import InterviewRoom from './InterviewRoom';
+import CandidateMockInterview from './CandidateMockInterview';
 
 export default function CandidateDashboard({ user }) {
   const handleTabChange = (tab) => {
@@ -272,6 +273,12 @@ export default function CandidateDashboard({ user }) {
               onClick={() => handleTabChange('interviews')}
             >
               My Interviews & Matches
+            </button>
+            <button
+              className={`nav-item ${activeTab === 'mock-interview' ? 'active' : ''}`}
+              onClick={() => handleTabChange('mock-interview')}
+            >
+              AI Mock Practice
             </button>
             <button
               className={`nav-item ${activeTab === 'profile' ? 'active' : ''}`}
@@ -988,6 +995,11 @@ export default function CandidateDashboard({ user }) {
                   </div>
                 )}
               </div>
+            )}
+
+            {/* TAB: AI Mock Practice Mode */}
+            {activeTab === 'mock-interview' && (
+              <CandidateMockInterview profile={profile} user={user} />
             )}
           </>
         )}

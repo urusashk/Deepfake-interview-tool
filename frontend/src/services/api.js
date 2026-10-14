@@ -74,6 +74,14 @@ export const api = {
     });
   },
   getCandidateInterviews: () => apiRequest('/candidate/interviews'),
+  generateMockInterview: (payload) => apiRequest('/candidate/mock-interview/generate', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  }),
+  evaluateMockAnswer: (payload) => apiRequest('/candidate/mock-interview/evaluate-answer', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  }),
 
   // Notifications (Candidate)
   getNotifications: () => apiRequest('/candidate/notifications'),
@@ -114,6 +122,10 @@ export const api = {
   }),
   deleteQuestion: (questionId) => apiRequest(`/interviews/questions/${questionId}`, {
     method: 'DELETE',
+  }),
+  getFollowUpQuestions: (interviewId, payload) => apiRequest(`/interviews/${interviewId}/follow-up-questions`, {
+    method: 'POST',
+    body: JSON.stringify(payload),
   }),
 
   // Phase 4 Live Room & Recording

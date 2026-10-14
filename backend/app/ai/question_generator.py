@@ -201,3 +201,100 @@ def generate_personalized_questions(
         q["order_index"] = idx + 1
 
     return questions[:target_count]
+
+
+def generate_ai_follow_up_questions(
+    question_text: str,
+    candidate_answer: Optional[str] = None,
+    category: Optional[str] = "Technical",
+    difficulty: Optional[str] = "Medium",
+    skills: Optional[List[str]] = None,
+    job_role: str = "Software Engineer"
+) -> List[Dict[str, str]]:
+    """
+    Generates dynamic, intelligent follow-up probe questions based on candidate response,
+    probing edge cases, architectural trade-offs, and failure recovery.
+    """
+    ans = (candidate_answer or "").strip()
+    ans_lower = ans.lower()
+    q_lower = question_text.lower()
+    skill_list = skills or ["Python", "FastAPI", "React", "PostgreSQL", "Docker"]
+    
+    primary_skill = skill_list[0] if skill_list else "the primary technology"
+    for s in skill_list:
+        if s.lower() in ans_lower or s.lower() in q_lower:
+            primary_skill = s
+            break
+
+    follow_ups = []
+
+    # 1. Deep Dive / Edge Case
+    if "async" in ans_lower or "concurrency" in ans_lower or "thread" in ans_lower:
+        follow_ups.append({
+            "id": "fu_1",
+            "question_text": f"How do you handle unhandled exceptions, race conditions, or blocking I/O calls inside your asynchronous {primary_skill} workers?",
+            "intent": "Deep Dive: Concurrency & Error Trapping",
+            "reasoning": f"Candidate mentioned concurrency; probe their error handling boundaries and race condition mitigation in {primary_skill}."
+        })
+    elif "cache" in ans_lower or "redis" in ans_lower:
+        follow_ups.append({
+            "id": "fu_1",
+            "question_text": "What caching invalidation and TTL strategy do you implement to avoid cache stampede and stale data reads during peak write bursts?",
+            "intent": "Deep Dive: Cache Consistency",
+            "reasoning": "Candidate highlighted caching; verify whether they understand stampede effects and consistency trade-offs."
+        })
+    elif "database" in ans_lower or "sql" in ans_lower or "query" in ans_lower:
+        follow_ups.append({
+            "id": "fu_1",
+            "question_text": "How do you detect slow queries under heavy connection pools, and what indexing or query optimization strategies do you apply first?",
+            "intent": "Deep Dive: Database Performance",
+            "reasoning": "Candidate mentioned database interactions; test their query profiling and indexing depth."
+        })
+    elif "api" in ans_lower or "service" in ans_lower or "rest" in ans_lower:
+        follow_ups.append({
+            "id": "fu_1",
+            "question_text": f"How do you enforce idempotency, rate limiting, and graceful degradation in your {primary_skill} APIs?",
+            "intent": "Deep Dive: API Reliability",
+            "reasoning": "Probe how the candidate builds robust, abuse-resistant web APIs."
+        })
+    else:
+        follow_ups.append({
+            "id": "fu_1",
+            "question_text": f"Can you walk through a concrete edge case in {primary_skill} where this exact approach might behave unexpectedly or introduce memory/runtime overhead?",
+            "intent": "Deep Dive: Edge Case Analysis",
+            "reasoning": "Assess the candidate's understanding of boundary conditions and edge cases."
+        })
+
+    # 2. Architecture & Trade-offs
+    if "microservice" in ans_lower or "distributed" in ans_lower:
+        follow_ups.append({
+            "id": "fu_2",
+            "question_text": "What distributed tracing or telemetry do you rely on to pinpoint latency bottlenecks across inter-service calls?",
+            "intent": "Architecture: Distributed Systems",
+            "reasoning": "Verify production monitoring maturity in distributed service environments."
+        })
+    elif "security" in ans_lower or "auth" in ans_lower or "jwt" in ans_lower:
+        follow_ups.append({
+            "id": "fu_2",
+            "question_text": "How do you manage secret rotation, token revocation, and protection against replay attacks in that setup?",
+            "intent": "Architecture: Security & Auth",
+            "reasoning": "Probe the candidate's operational security protocols and token lifecycle design."
+        })
+    else:
+        follow_ups.append({
+            "id": "fu_2",
+            "question_text": f"What alternative architectural pattern did you consider for this solution, and what specific trade-offs made you choose this design?",
+            "intent": "Trade-offs: Design Decision Reasoning",
+            "reasoning": "Evaluates candidate's critical reasoning and ability to weigh technical trade-offs."
+        })
+
+    # 3. Scale & Failure Recovery
+    follow_ups.append({
+        "id": "fu_3",
+        "question_text": f"If system throughput increased by 10x overnight, where would the first bottleneck appear, and how would you redesign the bottleneck without causing downtime?",
+        "intent": "Scale & Resilience: 10x Load Test",
+        "reasoning": "Tests high-scale readiness, capacity planning, and non-disruptive migration strategy."
+    })
+
+    return follow_ups
+

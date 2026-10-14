@@ -58,6 +58,13 @@ export default function InterviewRoom({ interviewId, user, onLeave, onInterviewC
   const [speechSupported, setSpeechSupported] = useState(true);
   const [speechStatusNotice, setSpeechStatusNotice] = useState('');
 
+  // State: AI Copilot Follow-up Questions (Interviewer Only)
+  const [followUps, setFollowUps] = useState([]);
+  const [loadingFollowUps, setLoadingFollowUps] = useState(false);
+  const [followUpError, setFollowUpError] = useState('');
+  const [copiedFollowUpId, setCopiedFollowUpId] = useState(null);
+  const [broadcastNotice, setBroadcastNotice] = useState('');
+
   const liveSpeechRecognizerRef = useRef(null);
   const liveTranscriptTurnsRef = useRef([]);
   const isRecognizingActiveRef = useRef(false);
@@ -786,6 +793,85 @@ export default function InterviewRoom({ interviewId, user, onLeave, onInterviewC
     }
   };
 
+  // 7b. AI Copilot Follow-Up Question Generator (Interviewer Only)
+  const handleGenerateFollowUps = async (overrideQuestionText = null) => {
+    if (!isInterviewer) return;
+    const qText = overrideQuestionText || currentQ?.question_text;
+    if (!qText) return;
+
+    try {
+      setLoadingFollowUps(true);
+      setFollowUpError('');
+      setBroadcastNotice('');
+
+      const candidateTurns = liveTranscriptTurns.filter(t => t.speaker === 'candidate');
+      const latestAnswer = candidateTurns.length > 0 ? candidateTurns[candidateTurns.length - 1].text : '';
+
+      const res = await api.getFollowUpQuestions(interviewId, {
+        question_text: qText,
+        candidate_answer: latestAnswer,
+        category: currentQ?.category || 'Technical',
+        difficulty: currentQ?.difficulty || 'Medium'
+      });
+
+      if (res && res.follow_ups) {
+        setFollowUps(res.follow_ups);
+        setActiveSideTab('copilot');
+      }
+    } catch (err) {
+      console.error('Error generating follow-ups:', err);
+      setFollowUpError(err.message || 'Could not generate follow-up questions.');
+    } finally {
+      setLoadingFollowUps(false);
+    }
+  };
+
+  const handleAskFollowUp = async (followUp) => {
+    if (!isInterviewer) return;
+    try {
+      setBroadcastNotice('');
+      // 1. Add as custom question in DB
+      const created = await api.addCustomQuestion(interviewId, {
+        question_text: followUp.question_text,
+        category: 'AI Follow-up',
+        difficulty: 'Medium'
+      });
+
+      // 2. Append to interviewer questions state and select it
+      const updatedQuestions = [...questions, created];
+      setQuestions(updatedQuestions);
+      const newIdx = updatedQuestions.length - 1;
+      setCurrentQuestionIdx(newIdx);
+      setActiveQuestion(created);
+
+      // 3. Broadcast to candidate via WebSocket
+      if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+        wsRef.current.send(JSON.stringify({
+          type: 'question-nav',
+          question_index: newIdx,
+          question: {
+            id: created.id,
+            question_text: created.question_text,
+            category: created.category,
+            difficulty: created.difficulty,
+            order_index: created.order_index
+          }
+        }));
+      }
+
+      // 4. Update session on backend
+      await api.updateInterviewSession(interviewId, {
+        current_question_index: newIdx
+      });
+
+      setBroadcastNotice(`Follow-up asked and broadcast to candidate!`);
+      setTimeout(() => setBroadcastNotice(''), 4000);
+    } catch (err) {
+      console.error('Error broadcasting follow-up:', err);
+      setFollowUpError('Failed to broadcast follow-up question.');
+    }
+  };
+
   // 8. In-room Chat
   const handleSendChatMessage = (e) => {
     e.preventDefault();
@@ -1260,9 +1346,9 @@ export default function InterviewRoom({ interviewId, user, onLeave, onInterviewC
                   )}
                 </div>
 
-                {/* Only Interviewer gets Prev/Next navigation controls */}
+                {/* Only Interviewer gets Prev/Next & AI Follow-ups controls */}
                 {isInterviewer && (
-                  <div style={{ display: 'flex', gap: '0.4rem' }}>
+                  <div style={{ display: 'flex', gap: '0.4rem', alignItems: 'center' }}>
                     <button
                       className="btn btn-secondary btn-sm"
                       style={{ padding: '2px 8px', fontSize: '0.75rem' }}
@@ -1280,6 +1366,16 @@ export default function InterviewRoom({ interviewId, user, onLeave, onInterviewC
                       title="Next Question"
                     >
                       Next ▶
+                    </button>
+                    <button
+                      type="button"
+                      className="btn btn-secondary btn-sm"
+                      style={{ padding: '2px 10px', fontSize: '0.75rem', borderColor: '#2563eb', color: '#2563eb', fontWeight: 600 }}
+                      onClick={() => handleGenerateFollowUps()}
+                      disabled={loadingFollowUps}
+                      title="Generate AI follow-up probe questions based on candidate response"
+                    >
+                      {loadingFollowUps ? 'Analyzing...' : 'AI Follow-ups'}
                     </button>
                   </div>
                 )}
@@ -1524,6 +1620,14 @@ export default function InterviewRoom({ interviewId, user, onLeave, onInterviewC
                 Questions ({questions.length})
               </button>
             )}
+            {isInterviewer && (
+              <button
+                className={`tab-btn ${activeSideTab === 'copilot' ? 'active' : ''}`}
+                onClick={() => setActiveSideTab('copilot')}
+              >
+                AI Copilot {followUps.length > 0 && `(${followUps.length})`}
+              </button>
+            )}
             <button
               className={`tab-btn ${activeSideTab === 'chat' ? 'active' : ''}`}
               onClick={() => setActiveSideTab('chat')}
@@ -1578,6 +1682,139 @@ export default function InterviewRoom({ interviewId, user, onLeave, onInterviewC
                     </div>
                   ))
                 )}
+              </div>
+            </div>
+          )}
+
+          {/* Tab 1b: AI Recruiter Copilot (INTERVIEWER ONLY) */}
+          {isInterviewer && activeSideTab === 'copilot' && (
+            <div className="sidebar-content" style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
+              <div style={{ padding: '0.65rem 0.85rem', borderBottom: '1px solid #e2e8f0', background: '#f8fafc', fontSize: '0.75rem', color: '#64748b', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                <span style={{ fontWeight: 600 }}>AI Recruiter Copilot</span>
+                <button
+                  type="button"
+                  className="btn btn-secondary btn-sm"
+                  style={{ padding: '2px 8px', fontSize: '0.7rem' }}
+                  onClick={() => handleGenerateFollowUps()}
+                  disabled={loadingFollowUps}
+                >
+                  {loadingFollowUps ? 'Analyzing...' : 'Refresh Follow-ups'}
+                </button>
+              </div>
+
+              <div style={{ overflowY: 'auto', flex: 1, padding: '0.75rem', display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
+                {broadcastNotice && (
+                  <div className="alert alert-success" style={{ fontSize: '0.75rem', padding: '6px 10px', margin: 0 }}>
+                    {broadcastNotice}
+                  </div>
+                )}
+
+                {followUpError && (
+                  <div className="alert alert-error" style={{ fontSize: '0.75rem', padding: '6px 10px', margin: 0 }}>
+                    {followUpError}
+                  </div>
+                )}
+
+                {/* Context: Question & Latest Candidate Answer */}
+                <div style={{ background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: '6px', padding: '0.65rem 0.75rem' }}>
+                  <div style={{ fontSize: '0.7rem', fontWeight: 700, color: '#475569', textTransform: 'uppercase', marginBottom: '0.2rem' }}>
+                    Active Question
+                  </div>
+                  <p style={{ fontSize: '0.8rem', color: '#0f172a', margin: '0 0 0.5rem 0', fontWeight: 600 }}>
+                    {currentQ?.question_text || 'No question active'}
+                  </p>
+
+                  <div style={{ fontSize: '0.7rem', fontWeight: 700, color: '#475569', textTransform: 'uppercase', marginBottom: '0.2rem' }}>
+                    Candidate's Latest Spoken Answer
+                  </div>
+                  <p style={{ fontSize: '0.75rem', color: '#334155', margin: 0, fontStyle: 'italic', background: '#ffffff', padding: '6px 8px', borderRadius: '4px', border: '1px solid #e2e8f0' }}>
+                    {liveTranscriptTurns.filter(t => t.speaker === 'candidate').length > 0
+                      ? `"${liveTranscriptTurns.filter(t => t.speaker === 'candidate').slice(-1)[0].text}"`
+                      : 'No spoken candidate turn transcribed yet. Speak into mic or click Refresh.'}
+                  </p>
+                </div>
+
+                {/* Follow-up Question Suggestions */}
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '0.65rem' }}>
+                  <div style={{ fontSize: '0.75rem', fontWeight: 700, color: '#0f172a', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                    <span>Suggested Follow-Up Probes:</span>
+                    <span style={{ fontSize: '0.7rem', color: '#64748b' }}>{followUps.length} generated</span>
+                  </div>
+
+                  {followUps.length === 0 ? (
+                    <div style={{ textAlign: 'center', color: '#94a3b8', padding: '1.5rem 1rem', fontSize: '0.8rem', background: '#ffffff', border: '1px dashed #cbd5e1', borderRadius: '6px' }}>
+                      <p style={{ margin: '0 0 0.5rem 0' }}>No follow-up questions generated yet.</p>
+                      <button
+                        type="button"
+                        className="btn btn-primary btn-sm"
+                        style={{ fontSize: '0.75rem', padding: '4px 10px' }}
+                        onClick={() => handleGenerateFollowUps()}
+                        disabled={loadingFollowUps}
+                      >
+                        {loadingFollowUps ? 'Generating Suggestions...' : 'Generate Follow-Up Questions'}
+                      </button>
+                    </div>
+                  ) : (
+                    followUps.map((fu, idx) => (
+                      <div
+                        key={fu.id || idx}
+                        style={{
+                          background: '#ffffff',
+                          border: '1px solid #e2e8f0',
+                          borderRadius: '6px',
+                          padding: '0.75rem',
+                          display: 'flex',
+                          flexDirection: 'column',
+                          gap: '0.45rem'
+                        }}
+                      >
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                          <span className="badge" style={{ backgroundColor: '#e0f2fe', color: '#0369a1', fontSize: '0.675rem', fontWeight: 600 }}>
+                            {fu.intent}
+                          </span>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              navigator.clipboard.writeText(fu.question_text);
+                              setCopiedFollowUpId(fu.id);
+                              setTimeout(() => setCopiedFollowUpId(null), 2000);
+                            }}
+                            style={{
+                              background: 'transparent',
+                              border: 'none',
+                              color: copiedFollowUpId === fu.id ? '#16a34a' : '#64748b',
+                              fontSize: '0.7rem',
+                              cursor: 'pointer',
+                              fontWeight: 600
+                            }}
+                          >
+                            {copiedFollowUpId === fu.id ? 'Copied' : 'Copy'}
+                          </button>
+                        </div>
+
+                        <p style={{ fontSize: '0.825rem', color: '#0f172a', fontWeight: 600, margin: 0, lineHeight: 1.35 }}>
+                          "{fu.question_text}"
+                        </p>
+
+                        <div style={{ fontSize: '0.725rem', color: '#64748b', background: '#f8fafc', padding: '4px 8px', borderRadius: '4px' }}>
+                          <span style={{ fontWeight: 600, color: '#475569' }}>Why probe: </span>
+                          {fu.reasoning}
+                        </div>
+
+                        <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: '0.2rem' }}>
+                          <button
+                            type="button"
+                            className="btn btn-primary btn-sm"
+                            style={{ padding: '3px 10px', fontSize: '0.75rem' }}
+                            onClick={() => handleAskFollowUp(fu)}
+                          >
+                            Ask Candidate Now
+                          </button>
+                        </div>
+                      </div>
+                    ))
+                  )}
+                </div>
               </div>
             </div>
           )}

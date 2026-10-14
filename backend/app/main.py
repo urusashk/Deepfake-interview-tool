@@ -1,4 +1,5 @@
 import os
+import re
 import uuid
 import json
 import aiofiles
@@ -32,12 +33,14 @@ from app.schemas import (
     InterviewQuestionCreate, InterviewQuestionUpdate, InterviewQuestionResponse,
     InterviewSessionUpdateRequest, RecordingConsentRequest,
     InterviewAnalysisResponse, QuestionAnswerEvaluation, ResumeClaimVerification, FullTranscriptEntry,
-    LoadTranscriptRequest
+    LoadTranscriptRequest, FollowUpQuestionRequest, FollowUpQuestionResponse, FollowUpQuestionItem,
+    MockInterviewGenerateRequest, MockInterviewGenerateResponse, MockQuestionItem,
+    MockAnswerEvaluateRequest, MockAnswerEvaluateResponse
 )
 from app.ai.resume_parser import parse_resume_document
 from app.ai.jd_analyzer import analyze_job_description
 from app.ai.matcher import match_resume_to_jd
-from app.ai.question_generator import generate_personalized_questions
+from app.ai.question_generator import generate_personalized_questions, generate_ai_follow_up_questions
 from app.ai.analysis_service import (
     run_complete_interview_analysis,
     generate_sample_interview_transcript,
@@ -839,6 +842,159 @@ def get_candidate_interviews(
     )
     return [format_interview_response(it, db) for it in interviews]
 
+# ----------------- CANDIDATE AUTONOMOUS MOCK INTERVIEW PRACTICE -----------------
+
+@app.post("/api/candidate/mock-interview/generate", response_model=MockInterviewGenerateResponse)
+def generate_mock_interview(
+    payload: MockInterviewGenerateRequest,
+    current_user: User = Depends(require_candidate),
+    db: Session = Depends(get_db)
+):
+    """
+    Autonomous Mock Interview Generator.
+    Generates tailored practice interview questions based on candidate profile, skills, and target role.
+    """
+    job_role = (payload.job_role or "Software Engineer").strip()
+    target_count = min(7, max(2, payload.target_count or 3))
+
+    profile = db.query(CandidateProfile).filter(CandidateProfile.user_id == current_user.id).first()
+    resume_parsed = None
+    if profile and profile.resumes:
+        latest_r = sorted(profile.resumes, key=lambda r: r.uploaded_at, reverse=True)[0]
+        if latest_r.parsed_data:
+            try:
+                resume_parsed = json.loads(latest_r.parsed_data)
+            except Exception:
+                resume_parsed = None
+
+    questions = generate_personalized_questions(
+        resume_parsed=resume_parsed,
+        jd_parsed=None,
+        job_role=job_role,
+        target_count=target_count
+    )
+
+    q_items = []
+    for idx, q in enumerate(questions):
+        q_items.append(MockQuestionItem(
+            id=idx + 1,
+            question_text=q["question_text"],
+            category=q.get("category", "Technical"),
+            difficulty=q.get("difficulty", "Medium"),
+            order_index=idx + 1
+        ))
+
+    return MockInterviewGenerateResponse(
+        job_role=job_role,
+        questions=q_items
+    )
+
+
+@app.post("/api/candidate/mock-interview/evaluate-answer", response_model=MockAnswerEvaluateResponse)
+def evaluate_mock_answer(
+    payload: MockAnswerEvaluateRequest,
+    current_user: User = Depends(require_candidate),
+    db: Session = Depends(get_db)
+):
+    """
+    Instant Mock Interview Coaching Engine.
+    Evaluates candidate's spoken or written response and returns structured performance scores and coaching feedback.
+    """
+    ans = payload.candidate_answer.strip()
+    q_text = payload.question_text.strip()
+    words = [w.lower() for w in re.findall(r'\w+', ans)]
+    word_count = len(words)
+    difficulty = payload.difficulty or "Medium"
+    category = payload.category or "Technical"
+
+    if word_count < 10:
+        return MockAnswerEvaluateResponse(
+            question_id=payload.question_id or 1,
+            relevance_score=45.0,
+            technical_score=40.0,
+            completeness_score=35.0,
+            average_score=40.0,
+            key_strengths=["Attempted to respond to the interview prompt."],
+            missing_points=[
+                "Answer was too brief. Elaborate with concrete examples and technical details.",
+                "Mention specific technologies, design decisions, or architectural trade-offs."
+            ],
+            coach_feedback="Try elaborating further using the STAR method (Situation, Task, Action, Result) to provide a complete, compelling answer."
+        )
+
+    # 1. Relevance Score
+    q_words = set(re.findall(r'\w+', q_text.lower())) - {"what", "how", "can", "you", "the", "and", "for", "with", "are", "why", "in", "is", "a", "an"}
+    matched_q_terms = [w for w in q_words if w in words]
+    rel_ratio = len(matched_q_terms) / max(1, len(q_words))
+    base_rel = 75.0 + min(22.0, rel_ratio * 30.0) + (3.0 if word_count > 40 else -5.0)
+    relevance_score = round(min(98.0, max(50.0, base_rel)), 1)
+
+    # 2. Technical Score
+    tech_keywords = [
+        "async", "await", "docker", "caching", "redis", "postgresql", "fastapi", "python",
+        "react", "state", "latency", "sql", "api", "rest", "queue", "celery", "kubernetes",
+        "microservices", "unit", "pytest", "component", "hook", "index", "concurrency",
+        "scaling", "performance", "database", "git", "ci/cd", "security", "token", "auth"
+    ]
+    tech_matches = [tk for tk in tech_keywords if tk in words]
+    base_tech = 72.0 + min(24.0, len(tech_matches) * 3.5)
+    if difficulty == "Hard" and len(tech_matches) < 2:
+        base_tech -= 8.0
+    technical_score = round(min(98.0, max(55.0, base_tech)), 1)
+
+    # 3. Completeness Score
+    has_example = any(phrase in ans.lower() for phrase in ["for example", "in my previous", "in one project", "one instance", "when optimizing", "i implemented", "we chose"])
+    has_outcome = any(phrase in ans.lower() for phrase in ["improved", "resulted in", "reduced", "increased", "solved", "structure", "ensured"])
+    base_comp = 72.0
+    if word_count > 60:
+        base_comp += 12.0
+    if has_example:
+        base_comp += 8.0
+    if has_outcome:
+        base_comp += 6.0
+    completeness_score = round(min(97.0, max(50.0, base_comp)), 1)
+
+    avg_score = round((relevance_score + technical_score + completeness_score) / 3.0, 1)
+
+    # Strengths & Missing Points
+    strengths = []
+    missing = []
+
+    if relevance_score >= 80:
+        strengths.append("Directly addressed the core concepts outlined in the prompt.")
+    if tech_matches:
+        strengths.append(f"Highlighted pertinent technical concepts: {', '.join(tech_matches[:3])}.")
+    if has_example:
+        strengths.append("Used practical experience or concrete examples to anchor the explanation.")
+    if not strengths:
+        strengths.append("Communicated ideas with clear professional phrasing.")
+
+    if completeness_score < 82:
+        missing.append("Include measurable outcomes or benchmark metrics (e.g. latency reduced, throughput gained).")
+    if not has_example:
+        missing.append("Give a concrete real-world scenario from your past projects to reinforce theoretical knowledge.")
+    if len(tech_matches) < 2:
+        missing.append("Incorporate more domain-specific tooling and architectural terminology.")
+    if not missing:
+        missing.append("Elaborate on edge case handling and disaster recovery considerations.")
+
+    coach_feedback = (
+        f"Solid {difficulty.lower()}-level response on {category.lower()} concepts. "
+        f"You scored {relevance_score}% on relevance and {technical_score}% on technical terminology. "
+        + ("Great job framing the architectural rationale!" if avg_score >= 85 else "Aim to incorporate more concrete production trade-offs to stand out to senior interviewers.")
+    )
+
+    return MockAnswerEvaluateResponse(
+        question_id=payload.question_id or 1,
+        relevance_score=relevance_score,
+        technical_score=technical_score,
+        completeness_score=completeness_score,
+        average_score=avg_score,
+        key_strengths=strengths,
+        missing_points=missing,
+        coach_feedback=coach_feedback
+    )
+
 # ----------------- NOTIFICATION ENDPOINTS -----------------
 
 @app.get("/api/candidate/notifications", response_model=List[NotificationResponse])
@@ -1270,6 +1426,44 @@ def delete_question(
     db.delete(q)
     db.commit()
     return {"status": "success", "message": "Question deleted successfully"}
+
+@app.post("/api/interviews/{interview_id}/follow-up-questions", response_model=FollowUpQuestionResponse)
+def get_follow_up_questions(
+    interview_id: int,
+    payload: FollowUpQuestionRequest,
+    current_user: User = Depends(require_interviewer),
+    db: Session = Depends(get_db)
+):
+    """
+    Generates intelligent real-time follow-up probe questions for the interviewer.
+    Only accessible to the assigned interviewer.
+    """
+    interview = db.query(Interview).filter(Interview.id == interview_id).first()
+    if not interview:
+        raise HTTPException(status_code=404, detail="Interview not found")
+    if interview.interviewer_id != current_user.id:
+        raise HTTPException(status_code=403, detail="Unauthorized")
+
+    skills = []
+    if interview.candidate and interview.candidate.candidate_profile:
+        profile_skills = interview.candidate.candidate_profile.skills
+        if profile_skills:
+            skills = [s.strip() for s in profile_skills.split(",") if s.strip()]
+
+    follow_ups = generate_ai_follow_up_questions(
+        question_text=payload.question_text,
+        candidate_answer=payload.candidate_answer,
+        category=payload.category,
+        difficulty=payload.difficulty,
+        skills=skills,
+        job_role=interview.job_role
+    )
+
+    return FollowUpQuestionResponse(
+        interview_id=interview.id,
+        original_question=payload.question_text,
+        follow_ups=[FollowUpQuestionItem(**fu) for fu in follow_ups]
+    )
 
 # ----------------- PHASE 4: WEBSOCKET SIGNALING & INTERVIEW ROOM -----------------
 

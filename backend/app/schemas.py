@@ -232,6 +232,23 @@ class LoadTranscriptRequest(BaseModel):
     transcript: List[TranscriptItem]
     is_sample: bool = True
 
+class FollowUpQuestionRequest(BaseModel):
+    question_text: str
+    candidate_answer: Optional[str] = ""
+    category: Optional[str] = "Technical"
+    difficulty: Optional[str] = "Medium"
+
+class FollowUpQuestionItem(BaseModel):
+    id: str
+    question_text: str
+    intent: str
+    reasoning: str
+
+class FollowUpQuestionResponse(BaseModel):
+    interview_id: int
+    original_question: str
+    follow_ups: List[FollowUpQuestionItem]
+
 class InterviewAnalysisResponse(BaseModel):
     id: int
     interview_id: int
@@ -281,5 +298,39 @@ class InterviewResponse(BaseModel):
 
     class Config:
         from_attributes = True
+
+# Mock Interview Schemas (Candidate Practice Mode)
+class MockInterviewGenerateRequest(BaseModel):
+    job_role: Optional[str] = "Software Engineer"
+    target_count: Optional[int] = 3
+
+class MockQuestionItem(BaseModel):
+    id: int
+    question_text: str
+    category: str
+    difficulty: str
+    order_index: int
+
+class MockInterviewGenerateResponse(BaseModel):
+    job_role: str
+    questions: List[MockQuestionItem]
+
+class MockAnswerEvaluateRequest(BaseModel):
+    question_id: Optional[int] = 1
+    question_text: str
+    category: Optional[str] = "Technical"
+    difficulty: Optional[str] = "Medium"
+    candidate_answer: str
+
+class MockAnswerEvaluateResponse(BaseModel):
+    question_id: int
+    relevance_score: float
+    technical_score: float
+    completeness_score: float
+    average_score: float
+    key_strengths: List[str]
+    missing_points: List[str]
+    coach_feedback: str
+
 
 
