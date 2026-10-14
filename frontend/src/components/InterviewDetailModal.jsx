@@ -255,7 +255,7 @@ export default function InterviewDetailModal({ interviewId, onClose }) {
                   disabled={regenerating}
                   onClick={handleRegenerateQuestions}
                 >
-                  <span>⚡</span> {regenerating ? 'Regenerating...' : 'Regenerate AI Questions'}
+                  {regenerating ? 'Regenerating...' : 'Regenerate AI Questions'}
                 </button>
                 <button
                   type="button"
@@ -336,7 +336,7 @@ export default function InterviewDetailModal({ interviewId, onClose }) {
             {/* Questions List */}
             {(!interview.questions || interview.questions.length === 0) ? (
               <div className="empty-state">
-                <span style={{ fontSize: '2rem' }}>❓</span>
+                
                 <div className="empty-state-title">No questions prepared yet</div>
                 <div className="empty-state-desc">Click "Regenerate AI Questions" or "Add Custom Question" above.</div>
               </div>

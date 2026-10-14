@@ -5,6 +5,12 @@ import InterviewRoom from './InterviewRoom';
 import InterviewAnalysisModal from './InterviewAnalysisModal';
 
 export default function InterviewerDashboard({ user }) {
+  const handleTabChange = (tab) => {
+    setActiveTab(tab);
+    setSelectedAnalysisInterviewId(null);
+    setSelectedInterviewId(null);
+  };
+
   const [activeTab, setActiveTab] = useState('interviews'); // 'interviews', 'create-interview', 'job-descriptions', 'candidates'
   const [activeInterviewRoomId, setActiveInterviewRoomId] = useState(null);
   const [selectedAnalysisInterviewId, setSelectedAnalysisInterviewId] = useState(null);
@@ -117,7 +123,7 @@ export default function InterviewerDashboard({ user }) {
       setInterviewTitle('');
       setInterviewNotes('');
       setScheduledTime('');
-      setActiveTab('interviews');
+      handleTabChange('interviews');
       
       // Reload interviews and open question prep modal
       const updatedInterviews = await api.getInterviewerInterviews();
@@ -196,27 +202,27 @@ export default function InterviewerDashboard({ user }) {
           <nav className="sidebar-nav">
             <button
               className={`nav-item ${activeTab === 'interviews' ? 'active' : ''}`}
-              onClick={() => setActiveTab('interviews')}
+              onClick={() => handleTabChange('interviews')}
             >
-              <span>📅</span> Scheduled Interviews
+              Scheduled Interviews
             </button>
             <button
               className={`nav-item ${activeTab === 'candidates' ? 'active' : ''}`}
-              onClick={() => setActiveTab('candidates')}
+              onClick={() => handleTabChange('candidates')}
             >
-              <span>👥</span> Candidates & AI Match
+              Candidates & AI Match
             </button>
             <button
               className={`nav-item ${activeTab === 'create-interview' ? 'active' : ''}`}
-              onClick={() => setActiveTab('create-interview')}
+              onClick={() => handleTabChange('create-interview')}
             >
-              <span>➕</span> Schedule Interview
+              Schedule Interview
             </button>
             <button
               className={`nav-item ${activeTab === 'job-descriptions' ? 'active' : ''}`}
-              onClick={() => setActiveTab('job-descriptions')}
+              onClick={() => handleTabChange('job-descriptions')}
             >
-              <span>💼</span> Job Descriptions
+              Job Descriptions
             </button>
           </nav>
         </div>
@@ -247,7 +253,7 @@ export default function InterviewerDashboard({ user }) {
                   </div>
                   <button
                     className="btn btn-primary btn-sm"
-                    onClick={() => setActiveTab('create-interview')}
+                    onClick={() => handleTabChange('create-interview')}
                   >
                     + Schedule New Interview
                   </button>
@@ -255,7 +261,7 @@ export default function InterviewerDashboard({ user }) {
 
                 {interviews.length === 0 ? (
                   <div className="empty-state">
-                    <span style={{ fontSize: '2rem' }}>📅</span>
+                    
                     <div className="empty-state-title">No interviews scheduled yet</div>
                     <div className="empty-state-desc">Click "+ Schedule New Interview" to arrange a session and notify candidate.</div>
                   </div>
@@ -310,7 +316,7 @@ export default function InterviewerDashboard({ user }) {
                                     style={{ display: 'inline-flex', alignItems: 'center', gap: '0.3rem', fontWeight: 600 }}
                                     onClick={() => setActiveInterviewRoomId(i.id)}
                                   >
-                                    <span>🎥</span> Join Room
+                                    Join Room
                                   </button>
                                 )}
 
@@ -320,7 +326,7 @@ export default function InterviewerDashboard({ user }) {
                                   onClick={() => setSelectedAnalysisInterviewId(i.id)}
                                   title="View AI Evaluation & Analysis Report"
                                 >
-                                  <span>🧠</span> AI Report
+                                  AI Report
                                 </button>
 
                                 {i.recording_path && (
@@ -331,7 +337,7 @@ export default function InterviewerDashboard({ user }) {
                                     className="btn btn-secondary btn-sm"
                                     style={{ display: 'inline-flex', alignItems: 'center', gap: '0.3rem' }}
                                   >
-                                    <span>📼</span> Recording
+                                    Recording
                                   </a>
                                 )}
 
@@ -340,7 +346,7 @@ export default function InterviewerDashboard({ user }) {
                                   onClick={() => setSelectedInterviewId(i.id)}
                                   title="View / Edit Questions"
                                 >
-                                  ✏️ Questions
+                                  Questions
                                 </button>
                               </div>
                             </td>
@@ -382,7 +388,7 @@ export default function InterviewerDashboard({ user }) {
 
                   {candidates.length === 0 ? (
                     <div className="empty-state">
-                      <span style={{ fontSize: '2rem' }}>👥</span>
+                      
                       <div className="empty-state-title">No registered candidates yet</div>
                       <div className="empty-state-desc">Candidates will appear here automatically once registered.</div>
                     </div>
@@ -462,13 +468,13 @@ export default function InterviewerDashboard({ user }) {
                               <div style={{ display: 'flex', flexDirection: 'column', gap: '0.4rem', fontSize: '0.85rem', marginBottom: '1rem' }}>
                                 {cand.match_score.matching_skills?.length > 0 && (
                                   <div>
-                                    <strong style={{ color: '#166534' }}>✓ Matching Skills: </strong>
+                                    <strong style={{ color: '#166534' }}>Matching Skills: </strong>
                                     <span style={{ color: '#334155' }}>{cand.match_score.matching_skills.join(', ')}</span>
                                   </div>
                                 )}
                                 {cand.match_score.missing_skills?.length > 0 && (
                                   <div>
-                                    <strong style={{ color: '#b91c1c' }}>⚠ Missing / Required Skills: </strong>
+                                    <strong style={{ color: '#b91c1c' }}>Missing / Required Skills: </strong>
                                     <span style={{ color: '#64748b' }}>{cand.match_score.missing_skills.join(', ')}</span>
                                   </div>
                                 )}
@@ -499,7 +505,7 @@ export default function InterviewerDashboard({ user }) {
                               onClick={() => {
                                 setSelectedCandidateId(cand.id.toString());
                                 if (filterJdId) setSelectedJdId(filterJdId);
-                                setActiveTab('create-interview');
+                                handleTabChange('create-interview');
                               }}
                             >
                               Schedule Interview
@@ -632,7 +638,7 @@ export default function InterviewerDashboard({ user }) {
                       <button
                         type="button"
                         className="btn btn-secondary"
-                        onClick={() => setActiveTab('interviews')}
+                        onClick={() => handleTabChange('interviews')}
                       >
                         Cancel
                       </button>
@@ -847,7 +853,7 @@ export default function InterviewerDashboard({ user }) {
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
                   {viewingCandidateProfile.experience_details.map((exp, idx) => (
                     <div key={idx} style={{ background: '#f8fafc', padding: '0.6rem 0.85rem', borderRadius: '6px', border: '1px solid #e2e8f0', fontSize: '0.85rem' }}>
-                      💼 {exp}
+                      {exp}
                     </div>
                   ))}
                 </div>
@@ -861,7 +867,7 @@ export default function InterviewerDashboard({ user }) {
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
                   {viewingCandidateProfile.education.map((edu, idx) => (
                     <div key={idx} style={{ background: '#f8fafc', padding: '0.6rem 0.85rem', borderRadius: '6px', border: '1px solid #e2e8f0', fontSize: '0.85rem' }}>
-                      🎓 <strong>{edu.degree}</strong> {edu.raw_context && `— ${edu.raw_context}`}
+                      <strong>{edu.degree}</strong> {edu.raw_context && `— ${edu.raw_context}`}
                     </div>
                   ))}
                 </div>
@@ -875,7 +881,7 @@ export default function InterviewerDashboard({ user }) {
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
                   {viewingCandidateProfile.projects.map((proj, idx) => (
                     <div key={idx} style={{ background: '#f8fafc', padding: '0.6rem 0.85rem', borderRadius: '6px', border: '1px solid #e2e8f0', fontSize: '0.85rem' }}>
-                      🚀 <strong>{proj.title}</strong>
+                      <strong>{proj.title}</strong>
                       {proj.description && <p style={{ fontSize: '0.8rem', color: '#475569', marginTop: '0.2rem' }}>{proj.description}</p>}
                     </div>
                   ))}
@@ -890,7 +896,7 @@ export default function InterviewerDashboard({ user }) {
                 <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.5rem' }}>
                   {viewingCandidateProfile.certifications.map((cert, idx) => (
                     <span key={idx} style={{ background: '#f0fdf4', color: '#166534', padding: '4px 10px', borderRadius: '6px', fontSize: '0.8rem', border: '1px solid #bbf7d0' }}>
-                      📜 {cert}
+                      {cert}
                     </span>
                   ))}
                 </div>
@@ -911,7 +917,7 @@ export default function InterviewerDashboard({ user }) {
                 onClick={() => {
                   setSelectedCandidateId(viewingCandidateProfile.id.toString());
                   setViewingCandidateProfile(null);
-                  setActiveTab('create-interview');
+                  handleTabChange('create-interview');
                 }}
               >
                 Schedule Interview with Candidate

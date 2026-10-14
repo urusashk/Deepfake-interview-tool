@@ -1,12 +1,14 @@
 import React, { useState, useEffect } from 'react';
 import { api } from '../services/api';
 import InterviewRoom from './InterviewRoom';
-import InterviewAnalysisModal from './InterviewAnalysisModal';
 
 export default function CandidateDashboard({ user }) {
+  const handleTabChange = (tab) => {
+    setActiveTab(tab);
+  };
+
   const [activeTab, setActiveTab] = useState('notifications'); // 'notifications', 'interviews', 'resumes', 'parsed-view', 'profile'
   const [activeInterviewRoomId, setActiveInterviewRoomId] = useState(null);
-  const [selectedAnalysisInterviewId, setSelectedAnalysisInterviewId] = useState(null);
   const [profile, setProfile] = useState(null);
   const [interviews, setInterviews] = useState([]);
   const [notifications, setNotifications] = useState([]);
@@ -202,7 +204,7 @@ export default function CandidateDashboard({ user }) {
         setProjectsList(updatedProfile.projects || []);
         setCertificationsList(updatedProfile.certifications || []);
       }
-      setActiveTab('profile');
+      handleTabChange('profile');
     } catch (err) {
       setError(err.message || 'Resume upload failed');
     } finally {
@@ -254,40 +256,40 @@ export default function CandidateDashboard({ user }) {
             <button
               className={`nav-item ${activeTab === 'notifications' ? 'active' : ''}`}
               onClick={() => {
-                setActiveTab('notifications');
+                handleTabChange('notifications');
                 if (unreadNotifCount > 0) {
                   handleMarkAllNotificationsRead();
                 }
               }}
             >
-              <span>🔔</span> Notifications
+              Notifications
               {unreadNotifCount > 0 && (
                 <span className="notif-badge-counter">{unreadNotifCount}</span>
               )}
             </button>
             <button
               className={`nav-item ${activeTab === 'interviews' ? 'active' : ''}`}
-              onClick={() => setActiveTab('interviews')}
+              onClick={() => handleTabChange('interviews')}
             >
-              <span>📅</span> My Interviews & Matches
+              My Interviews & Matches
             </button>
             <button
               className={`nav-item ${activeTab === 'profile' ? 'active' : ''}`}
-              onClick={() => setActiveTab('profile')}
+              onClick={() => handleTabChange('profile')}
             >
-              <span>👤</span> Candidate Profile
+              Candidate Profile
             </button>
             <button
               className={`nav-item ${activeTab === 'resumes' ? 'active' : ''}`}
-              onClick={() => setActiveTab('resumes')}
+              onClick={() => handleTabChange('resumes')}
             >
-              <span>📄</span> Resume Upload
+              Resume Upload
             </button>
             <button
               className={`nav-item ${activeTab === 'parsed-view' ? 'active' : ''}`}
-              onClick={() => setActiveTab('parsed-view')}
+              onClick={() => handleTabChange('parsed-view')}
             >
-              <span>🤖</span> Parsed Resume View
+              Parsed Resume View
             </button>
           </nav>
         </div>
@@ -328,7 +330,7 @@ export default function CandidateDashboard({ user }) {
 
                 {notifications.length === 0 ? (
                   <div className="empty-state">
-                    <span style={{ fontSize: '2.2rem' }}>🔔</span>
+                    
                     <div className="empty-state-title">No notifications yet</div>
                     <div className="empty-state-desc">When an interviewer schedules a session with you, you will see notifications here.</div>
                   </div>
@@ -386,7 +388,7 @@ export default function CandidateDashboard({ user }) {
 
                   {upcomingInterviews.length === 0 ? (
                     <div className="empty-state">
-                      <span style={{ fontSize: '2rem' }}>📅</span>
+                      
                       <div className="empty-state-title">No upcoming interviews scheduled</div>
                       <div className="empty-state-desc">You will be notified once an interviewer schedules a session.</div>
                     </div>
@@ -414,15 +416,7 @@ export default function CandidateDashboard({ user }) {
                                 style={{ display: 'inline-flex', alignItems: 'center', gap: '0.4rem', fontWeight: 600 }}
                                 onClick={() => setActiveInterviewRoomId(item.id)}
                               >
-                                <span>🎥</span> Join Interview Room
-                              </button>
-
-                              <button
-                                className="btn btn-sm"
-                                style={{ display: 'inline-flex', alignItems: 'center', gap: '0.35rem', fontWeight: 600, background: '#4f46e5', color: '#ffffff', border: '1px solid #4338ca' }}
-                                onClick={() => setSelectedAnalysisInterviewId(item.id)}
-                              >
-                                <span>🧠</span> AI Report
+                                Join Interview Room
                               </button>
 
                               {item.match_score && (
@@ -476,7 +470,7 @@ export default function CandidateDashboard({ user }) {
                             <div>
                               <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
                                 <h4 style={{ margin: 0 }}>{item.title}</h4>
-                                <span className="badge badge-completed">✓ Completed</span>
+                                <span className="badge badge-completed">Completed</span>
                               </div>
                               <p style={{ fontSize: '0.85rem', color: '#64748b', marginTop: '0.2rem' }}>
                                 Role: {item.job_role} &nbsp;|&nbsp; Date: {new Date(item.scheduled_time).toLocaleDateString()}
@@ -484,14 +478,6 @@ export default function CandidateDashboard({ user }) {
                             </div>
 
                             <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
-                              <button
-                                className="btn btn-primary btn-sm"
-                                style={{ display: 'inline-flex', alignItems: 'center', gap: '0.35rem', background: '#4f46e5', borderColor: '#4338ca' }}
-                                onClick={() => setSelectedAnalysisInterviewId(item.id)}
-                              >
-                                <span>🧠</span> AI Evaluation Report
-                              </button>
-
                               {item.recording_path && (
                                 <a
                                   href={api.getRecordingUrl(item.id)}
@@ -500,7 +486,7 @@ export default function CandidateDashboard({ user }) {
                                   className="btn btn-secondary btn-sm"
                                   style={{ display: 'inline-flex', alignItems: 'center', gap: '0.4rem' }}
                                 >
-                                  <span>📼</span> Recording
+                                  Recording
                                 </a>
                               )}
                             </div>
@@ -599,7 +585,7 @@ export default function CandidateDashboard({ user }) {
                   {/* Section 1: Education */}
                   <div style={{ marginTop: '1.5rem', paddingTop: '1.25rem', borderTop: '1px solid #e2e8f0' }}>
                     <h3 style={{ fontSize: '1rem', fontWeight: 600, color: '#0f172a', marginBottom: '0.75rem' }}>
-                      🎓 Education & Degrees ({educationList.length})
+                      Education & Degrees ({educationList.length})
                     </h3>
                     
                     <div style={{ display: 'flex', flexDirection: 'column', gap: '0.6rem', marginBottom: '0.85rem' }}>
@@ -653,7 +639,7 @@ export default function CandidateDashboard({ user }) {
                   {/* Section 2: Work Experience */}
                   <div style={{ marginTop: '1.5rem', paddingTop: '1.25rem', borderTop: '1px solid #e2e8f0' }}>
                     <h3 style={{ fontSize: '1rem', fontWeight: 600, color: '#0f172a', marginBottom: '0.75rem' }}>
-                      💼 Work Experience & Roles ({experienceList.length})
+                      Work Experience & Roles ({experienceList.length})
                     </h3>
 
                     <div style={{ display: 'flex', flexDirection: 'column', gap: '0.6rem', marginBottom: '0.85rem' }}>
@@ -694,7 +680,7 @@ export default function CandidateDashboard({ user }) {
                   {/* Section 3: Projects */}
                   <div style={{ marginTop: '1.5rem', paddingTop: '1.25rem', borderTop: '1px solid #e2e8f0' }}>
                     <h3 style={{ fontSize: '1rem', fontWeight: 600, color: '#0f172a', marginBottom: '0.75rem' }}>
-                      🚀 Projects & Highlights ({projectsList.length})
+                      Projects & Highlights ({projectsList.length})
                     </h3>
 
                     <div style={{ display: 'flex', flexDirection: 'column', gap: '0.6rem', marginBottom: '0.85rem' }}>
@@ -747,7 +733,7 @@ export default function CandidateDashboard({ user }) {
                   {/* Section 4: Certifications */}
                   <div style={{ marginTop: '1.5rem', paddingTop: '1.25rem', borderTop: '1px solid #e2e8f0' }}>
                     <h3 style={{ fontSize: '1rem', fontWeight: 600, color: '#0f172a', marginBottom: '0.75rem' }}>
-                      📜 Certifications & Credentials ({certificationsList.length})
+                      Certifications & Credentials ({certificationsList.length})
                     </h3>
 
                     <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.6rem', marginBottom: '0.85rem' }}>
@@ -938,7 +924,7 @@ export default function CandidateDashboard({ user }) {
                         {parsedData.work_experience?.roles_and_companies?.length > 0 ? (
                           parsedData.work_experience.roles_and_companies.map((exp, idx) => (
                             <li key={idx} style={{ background: '#f8fafc', padding: '0.65rem 0.85rem', borderRadius: '6px', border: '1px solid #e2e8f0', fontSize: '0.85rem' }}>
-                              💼 {exp}
+                              {exp}
                             </li>
                           ))
                         ) : (
@@ -956,7 +942,7 @@ export default function CandidateDashboard({ user }) {
                         {parsedData.education?.length > 0 ? (
                           parsedData.education.map((edu, idx) => (
                             <div key={idx} style={{ background: '#f8fafc', padding: '0.65rem 0.85rem', borderRadius: '6px', border: '1px solid #e2e8f0', fontSize: '0.85rem' }}>
-                              🎓 <strong>{edu.degree}</strong> {edu.raw_context && `— ${edu.raw_context}`}
+                              <strong>{edu.degree}</strong> {edu.raw_context && `— ${edu.raw_context}`}
                             </div>
                           ))
                         ) : (
@@ -974,7 +960,7 @@ export default function CandidateDashboard({ user }) {
                         {parsedData.projects?.length > 0 ? (
                           parsedData.projects.map((proj, idx) => (
                             <div key={idx} style={{ background: '#f8fafc', padding: '0.65rem 0.85rem', borderRadius: '6px', border: '1px solid #e2e8f0', fontSize: '0.85rem' }}>
-                              🚀 <strong>{proj.title}</strong>
+                              <strong>{proj.title}</strong>
                               <p style={{ fontSize: '0.8rem', color: '#475569', marginTop: '0.2rem' }}>{proj.description}</p>
                             </div>
                           ))
@@ -993,7 +979,7 @@ export default function CandidateDashboard({ user }) {
                         <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.5rem' }}>
                           {parsedData.certifications.map((cert, idx) => (
                             <span key={idx} style={{ background: '#f0fdf4', color: '#166534', padding: '4px 10px', borderRadius: '6px', fontSize: '0.8rem', border: '1px solid #bbf7d0' }}>
-                              📜 {cert}
+                              {cert}
                             </span>
                           ))}
                         </div>
@@ -1006,17 +992,6 @@ export default function CandidateDashboard({ user }) {
           </>
         )}
       </main>
-
-      {/* Phase 5 AI Interview Analysis & Evaluation Modal */}
-      {selectedAnalysisInterviewId && (
-        <InterviewAnalysisModal
-          interviewId={selectedAnalysisInterviewId}
-          onClose={() => {
-            setSelectedAnalysisInterviewId(null);
-            loadDashboardData();
-          }}
-        />
-      )}
     </div>
   );
 }

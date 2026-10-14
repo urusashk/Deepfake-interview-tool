@@ -23,7 +23,7 @@ export default function LandingPage({ onSelectAuth }) {
           <div>
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '1rem' }}>
               <span className="badge badge-role">Candidate Portal</span>
-              <span style={{ fontSize: '1.25rem' }}>👤</span>
+              
             </div>
             <h3 style={{ fontSize: '1.25rem', marginBottom: '0.5rem' }}>For Candidates</h3>
             <p style={{ fontSize: '0.875rem', marginBottom: '1.5rem', color: '#64748b' }}>
@@ -57,7 +57,7 @@ export default function LandingPage({ onSelectAuth }) {
           <div>
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '1rem' }}>
               <span className="badge badge-role">Interviewer Portal</span>
-              <span style={{ fontSize: '1.25rem' }}>💼</span>
+              
             </div>
             <h3 style={{ fontSize: '1.25rem', marginBottom: '0.5rem' }}>For Interviewers & Recruiters</h3>
             <p style={{ fontSize: '0.875rem', marginBottom: '1.5rem', color: '#64748b' }}>

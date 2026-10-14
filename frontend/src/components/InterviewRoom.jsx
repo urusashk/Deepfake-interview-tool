@@ -51,6 +51,22 @@ export default function InterviewRoom({ interviewId, user, onLeave, onInterviewC
   const [chatInput, setChatInput] = useState('');
   const [activeSideTab, setActiveSideTab] = useState('questions'); // Interviewer: 'questions'|'chat', Candidate: 'chat'
 
+  // State: Live Speech-to-Text Transcript Turns & Recognition State
+  const [liveTranscriptTurns, setLiveTranscriptTurns] = useState([]);
+  const [interimTranscript, setInterimTranscript] = useState('');
+  const [isSpeechListening, setIsSpeechListening] = useState(false);
+  const [speechSupported, setSpeechSupported] = useState(true);
+  const [speechStatusNotice, setSpeechStatusNotice] = useState('');
+
+  const liveSpeechRecognizerRef = useRef(null);
+  const liveTranscriptTurnsRef = useRef([]);
+  const isRecognizingActiveRef = useRef(false);
+  const isAudioMutedRef = useRef(false);
+  const durationSecsRef = useRef(0);
+  const activeQuestionRef = useRef(null);
+  const currentQuestionIdxRef = useRef(0);
+  const questionsRef = useRef([]);
+
   // Refs
   const localVideoRef = useRef(null);
   const remoteVideoRef = useRef(null);
@@ -70,6 +86,31 @@ export default function InterviewRoom({ interviewId, user, onLeave, onInterviewC
       setActiveSideTab('chat');
     }
   }, [isInterviewer]);
+
+  // Keep refs synchronized with state to prevent stale closures
+  useEffect(() => {
+    isAudioMutedRef.current = isAudioMuted;
+  }, [isAudioMuted]);
+
+  useEffect(() => {
+    durationSecsRef.current = durationSecs;
+  }, [durationSecs]);
+
+  useEffect(() => {
+    activeQuestionRef.current = activeQuestion;
+  }, [activeQuestion]);
+
+  useEffect(() => {
+    currentQuestionIdxRef.current = currentQuestionIdx;
+  }, [currentQuestionIdx]);
+
+  useEffect(() => {
+    questionsRef.current = questions;
+  }, [questions]);
+
+  useEffect(() => {
+    liveTranscriptTurnsRef.current = liveTranscriptTurns;
+  }, [liveTranscriptTurns]);
 
   // 1. Initial Load & Session Fetch
   useEffect(() => {
@@ -235,6 +276,9 @@ export default function InterviewRoom({ interviewId, user, onLeave, onInterviewC
       if (consentGranted) {
         startLocalRecording(stream);
       }
+
+      // Automatically start live speech recognition for dialogue transcription
+      startLiveSpeechRecognition();
 
       // Initialize WebSocket and WebRTC
       initWebSocketAndWebRTC(stream);
@@ -556,6 +600,13 @@ export default function InterviewRoom({ interviewId, user, onLeave, onInterviewC
         break;
       }
 
+      case 'transcript-turn': {
+        if (msg.turn) {
+          setLiveTranscriptTurns(prev => [...prev, msg.turn]);
+        }
+        break;
+      }
+
       default:
         break;
     }
@@ -588,6 +639,21 @@ export default function InterviewRoom({ interviewId, user, onLeave, onInterviewC
         const nextState = !isAudioMuted;
         audioTracks[0].enabled = !nextState;
         setIsAudioMuted(nextState);
+        isAudioMutedRef.current = nextState;
+
+        if (nextState) {
+          // Mic muted -> stop speech recognizer
+          if (liveSpeechRecognizerRef.current) {
+            try {
+              liveSpeechRecognizerRef.current.stop();
+            } catch (e) {}
+          }
+          setIsSpeechListening(false);
+          setInterimTranscript('');
+        } else {
+          // Mic unmuted -> resume speech recognizer
+          startLiveSpeechRecognition();
+        }
 
         if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
           wsRef.current.send(JSON.stringify({
@@ -619,71 +685,6 @@ export default function InterviewRoom({ interviewId, user, onLeave, onInterviewC
     }
   };
 
-  // 6. Media Recording
-  const startLocalRecording = (stream) => {
-    try {
-      recordedChunksRef.current = [];
-      let options = {};
-      if (typeof MediaRecorder !== 'undefined' && MediaRecorder.isTypeSupported) {
-        if (MediaRecorder.isTypeSupported('video/webm;codecs=vp8,opus')) {
-          options = { mimeType: 'video/webm;codecs=vp8,opus' };
-        } else if (MediaRecorder.isTypeSupported('video/webm')) {
-          options = { mimeType: 'video/webm' };
-        }
-      }
-
-      let recorder;
-      try {
-        recorder = new MediaRecorder(stream, options);
-      } catch (e) {
-        recorder = new MediaRecorder(stream);
-      }
-
-      recorder.ondataavailable = (event) => {
-        if (event.data && event.data.size > 0) {
-          recordedChunksRef.current.push(event.data);
-        }
-      };
-
-      recorder.onstart = () => {
-        setIsRecording(true);
-      };
-
-      recorder.onstop = () => {
-        setIsRecording(false);
-      };
-
-      recorder.onerror = (e) => {
-        console.warn('MediaRecorder error caught safely:', e);
-      };
-
-      recorder.start(1000); // 1-second chunks
-      mediaRecorderRef.current = recorder;
-    } catch (err) {
-      console.warn('Could not start MediaRecorder safely:', err);
-    }
-  };
-
-  const stopAndUploadRecording = async () => {
-    if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
-      mediaRecorderRef.current.stop();
-    }
-
-    // Wait a brief moment for last chunk
-    await new Promise(r => setTimeout(r, 500));
-
-    if (recordedChunksRef.current.length > 0) {
-      try {
-        setRecordingUploading(true);
-        const recordedBlob = new Blob(recordedChunksRef.current, { type: 'video/webm' });
-        await api.uploadRecording(interviewId, recordedBlob, `session_${interviewId}.webm`);
-      } catch (err) {
-        console.error('Failed to upload recording:', err);
-      } finally {
-        setRecordingUploading(false);
-      }
-    }
-  };
 
   // 7. Question Navigation (Interviewer Control Only)
   const handleNextQuestion = async () => {
@@ -808,7 +809,188 @@ export default function InterviewRoom({ interviewId, user, onLeave, onInterviewC
     setChatInput('');
   };
 
-  // 9. End Interview Session
+  // Helper: Format duration seconds to MM:SS
+  function formatDuration(secs) {
+    const s = typeof secs === 'number' && !isNaN(secs) ? secs : 0;
+    const mins = Math.floor(s / 60);
+    const remainderSecs = s % 60;
+    return `${mins.toString().padStart(2, '0')}:${remainderSecs.toString().padStart(2, '0')}`;
+  }
+
+  // 9. Speech-to-Text & Recording Functions
+  const startLiveSpeechRecognition = useCallback(() => {
+    const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+    if (!SpeechRecognition) {
+      setSpeechSupported(false);
+      setSpeechStatusNotice('Web Speech API is not supported in this browser. Please use Google Chrome or Microsoft Edge.');
+      return;
+    }
+
+    // Stop existing recognizer instance if active
+    if (liveSpeechRecognizerRef.current) {
+      try {
+        liveSpeechRecognizerRef.current.abort();
+      } catch (e) {}
+      liveSpeechRecognizerRef.current = null;
+    }
+
+    try {
+      const recognizer = new SpeechRecognition();
+      recognizer.continuous = true;
+      recognizer.interimResults = true;
+      recognizer.lang = 'en-US';
+      recognizer.maxAlternatives = 1;
+
+      recognizer.onstart = () => {
+        setIsSpeechListening(true);
+        setSpeechStatusNotice('');
+      };
+
+      recognizer.onresult = (event) => {
+        let interimText = '';
+        for (let i = event.resultIndex; i < event.results.length; ++i) {
+          const res = event.results[i];
+          const spokenText = res[0] ? res[0].transcript.trim() : '';
+
+          if (res.isFinal) {
+            if (spokenText) {
+              const timestamp = formatDuration(durationSecsRef.current);
+              const currentQ = activeQuestionRef.current || (questionsRef.current.length > 0 ? questionsRef.current[currentQuestionIdxRef.current] : null);
+
+              const newTurn = {
+                speaker: isInterviewer ? 'interviewer' : 'candidate',
+                speaker_name: effectiveUser?.full_name || (isInterviewer ? 'Interviewer' : 'Candidate'),
+                text: spokenText,
+                timestamp: timestamp,
+                question_id: currentQ?.id || (currentQuestionIdxRef.current + 1)
+              };
+
+              setLiveTranscriptTurns((prev) => {
+                const updated = [...prev, newTurn];
+                liveTranscriptTurnsRef.current = updated;
+                return updated;
+              });
+
+              setInterimTranscript('');
+
+              if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+                wsRef.current.send(JSON.stringify({
+                  type: 'transcript-turn',
+                  turn: newTurn
+                }));
+              }
+            }
+          } else {
+            interimText += (res[0] ? res[0].transcript : '') + ' ';
+          }
+        }
+
+        if (interimText.trim()) {
+          setInterimTranscript(interimText.trim());
+        }
+      };
+
+      recognizer.onerror = (e) => {
+        console.warn('Live SpeechRecognition event notice:', e.error);
+        if (e.error === 'not-allowed') {
+          setSpeechStatusNotice('Microphone access for speech recognition was blocked.');
+          setIsSpeechListening(false);
+        } else if (e.error === 'service-not-allowed') {
+          setSpeechStatusNotice('Speech recognition service blocked by browser.');
+          setIsSpeechListening(false);
+        }
+      };
+
+      recognizer.onend = () => {
+        setIsSpeechListening(false);
+        // Chrome automatically ends recognition on silence. Auto-restart if session active and unmuted.
+        if (isRecognizingActiveRef.current && !isAudioMutedRef.current) {
+          try {
+            recognizer.start();
+            setIsSpeechListening(true);
+          } catch (err) {
+            setTimeout(() => {
+              if (isRecognizingActiveRef.current && !isAudioMutedRef.current) {
+                try {
+                  recognizer.start();
+                  setIsSpeechListening(true);
+                } catch (e) {}
+              }
+            }, 300);
+          }
+        }
+      };
+
+      recognizer.start();
+      isRecognizingActiveRef.current = true;
+      liveSpeechRecognizerRef.current = recognizer;
+      setIsSpeechListening(true);
+    } catch (e) {
+      console.warn('Could not initialize live speech recognition:', e);
+      setSpeechStatusNotice('Could not start speech recognition: ' + (e.message || 'unknown'));
+    }
+  }, [effectiveUser?.full_name, isInterviewer]);
+
+  const startLocalRecording = (stream) => {
+    try {
+      recordedChunksRef.current = [];
+      const mimeType = MediaRecorder.isTypeSupported('video/webm;codecs=vp9,opus')
+        ? 'video/webm;codecs=vp9,opus'
+        : MediaRecorder.isTypeSupported('video/webm')
+        ? 'video/webm'
+        : 'audio/webm';
+
+      const recorder = new MediaRecorder(stream, { mimeType });
+      recorder.ondataavailable = (e) => {
+        if (e.data && e.data.size > 0) {
+          recordedChunksRef.current.push(e.data);
+        }
+      };
+      recorder.start(1000);
+      mediaRecorderRef.current = recorder;
+      setIsRecording(true);
+    } catch (err) {
+      console.warn('Local recording start notice:', err);
+    }
+  };
+
+  const stopAndUploadRecording = async () => {
+    try {
+      isRecognizingActiveRef.current = false;
+      if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
+        try {
+          mediaRecorderRef.current.stop();
+        } catch (e) {}
+      }
+      if (liveSpeechRecognizerRef.current) {
+        try {
+          liveSpeechRecognizerRef.current.abort();
+        } catch (e) {}
+        liveSpeechRecognizerRef.current = null;
+      }
+      setIsSpeechListening(false);
+
+      if (recordedChunksRef.current.length > 0) {
+        const mimeType = recordedChunksRef.current[0].type || 'video/webm';
+        const blob = new Blob(recordedChunksRef.current, { type: mimeType });
+        if (blob.size > 500) {
+          await api.uploadRecording(interviewId, blob, `interview_${interviewId}_recording.webm`);
+        }
+      }
+
+      const turnsToSave = liveTranscriptTurnsRef.current.length > 0 ? liveTranscriptTurnsRef.current : liveTranscriptTurns;
+      if (turnsToSave.length > 0) {
+        await api.loadTranscriptAndAnalyze(interviewId, {
+          transcript: turnsToSave,
+          is_sample: false
+        });
+      }
+    } catch (err) {
+      console.warn('Recording/transcription upload error:', err);
+    }
+  };
+
+  // 10. End Interview Session
   const handleEndInterview = async () => {
     const confirmPrompt = isInterviewer
       ? 'Are you sure you want to end this interview session? This will complete the call for both participants.'
@@ -867,6 +1049,13 @@ export default function InterviewRoom({ interviewId, user, onLeave, onInterviewC
   };
 
   const cleanupSession = () => {
+    isRecognizingActiveRef.current = false;
+    if (liveSpeechRecognizerRef.current) {
+      try {
+        liveSpeechRecognizerRef.current.abort();
+      } catch (e) {}
+      liveSpeechRecognizerRef.current = null;
+    }
     if (timerRef.current) {
       clearInterval(timerRef.current);
     }
@@ -887,12 +1076,6 @@ export default function InterviewRoom({ interviewId, user, onLeave, onInterviewC
       wsRef.current.close();
       wsRef.current = null;
     }
-  };
-
-  const formatDuration = (secs) => {
-    const mins = Math.floor(secs / 60);
-    const remainderSecs = secs % 60;
-    return `${mins.toString().padStart(2, '0')}:${remainderSecs.toString().padStart(2, '0')}`;
   };
 
   // Determine current active question
@@ -916,7 +1099,7 @@ export default function InterviewRoom({ interviewId, user, onLeave, onInterviewC
               fontSize: '1.75rem',
               margin: '0 auto 1rem auto'
             }}>
-              {isInterviewer ? '🎙️' : '📹'}
+              {isInterviewer ? 'Audio Console' : 'Video Room'}
             </div>
             <h2 style={{ fontSize: '1.4rem', fontWeight: 700, color: '#0f172a', marginBottom: '0.5rem' }}>
               {isInterviewer ? 'Join Interviewer Console' : 'Join Video Interview Room'}
@@ -1104,6 +1287,82 @@ export default function InterviewRoom({ interviewId, user, onLeave, onInterviewC
               <p style={{ fontSize: '0.95rem', fontWeight: 600, color: '#0f172a', margin: 0, lineHeight: 1.4 }}>
                 "{currentQ.question_text}"
               </p>
+
+              {/* Candidate Live Spoken Caption Bar */}
+              {!isInterviewer && (
+                <div style={{
+                  marginTop: '0.75rem',
+                  display: 'flex',
+                  flexDirection: 'column',
+                  gap: '0.4rem',
+                  background: isAudioMuted ? '#f8fafc' : '#eff6ff',
+                  padding: '8px 12px',
+                  borderRadius: '6px',
+                  border: `1px solid ${isAudioMuted ? '#e2e8f0' : '#bfdbfe'}`
+                }}>
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', fontSize: '0.75rem' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                      <span
+                        className="recording-dot"
+                        style={{
+                          backgroundColor: isAudioMuted ? '#94a3b8' : isSpeechListening ? '#22c55e' : '#f59e0b',
+                          boxShadow: isSpeechListening && !isAudioMuted ? '0 0 6px rgba(34, 197, 94, 0.7)' : 'none'
+                        }}
+                      ></span>
+                      <span style={{ fontWeight: 700, color: isAudioMuted ? '#64748b' : '#1e40af' }}>
+                        {isAudioMuted
+                          ? 'Microphone Muted (Speech Recognition Paused)'
+                          : isSpeechListening
+                          ? 'Microphone Active & Transcribing'
+                          : 'Speech Recognition Ready'}
+                      </span>
+                    </div>
+
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+                      <span style={{ color: '#64748b' }}>
+                        {liveTranscriptTurns.length} answer turn{liveTranscriptTurns.length === 1 ? '' : 's'} recorded
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => setActiveSideTab('transcript')}
+                        style={{
+                          background: 'transparent',
+                          border: 'none',
+                          color: '#2563eb',
+                          fontWeight: 600,
+                          cursor: 'pointer',
+                          padding: 0,
+                          fontSize: '0.75rem',
+                          textDecoration: 'underline'
+                        }}
+                      >
+                        View Transcript
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* Active speech line (interim or latest turn) */}
+                  <div style={{ fontSize: '0.85rem', color: '#0f172a', minHeight: '22px', display: 'flex', alignItems: 'center' }}>
+                    {interimTranscript ? (
+                      <span style={{ color: '#2563eb', fontWeight: 500 }}>
+                        <span style={{ fontStyle: 'italic', opacity: 0.85 }}>Speaking now: </span>
+                        "{interimTranscript}..."
+                      </span>
+                    ) : liveTranscriptTurns.length > 0 && liveTranscriptTurns[liveTranscriptTurns.length - 1].speaker === 'candidate' ? (
+                      <span style={{ color: '#1e293b' }}>
+                        <span style={{ fontWeight: 600, color: '#16a34a', fontSize: '0.75rem' }}>Transcribed: </span>
+                        "{liveTranscriptTurns[liveTranscriptTurns.length - 1].text}"
+                      </span>
+                    ) : (
+                      <span style={{ color: '#64748b', fontStyle: 'italic', fontSize: '0.8rem' }}>
+                        {isAudioMuted
+                          ? 'Click Unmute below to begin speaking your answer.'
+                          : speechStatusNotice || 'Speak your answer clearly into your microphone...'}
+                      </span>
+                    )}
+                  </div>
+                </div>
+              )}
             </div>
           ) : (
             <div className="room-question-banner" style={{ background: '#f8fafc', borderLeft: '4px solid #cbd5e1' }}>
@@ -1152,14 +1411,14 @@ export default function InterviewRoom({ interviewId, user, onLeave, onInterviewC
               <div className="video-overlay-info">
                 <span className="participant-tag">
                   Candidate: {interviewData?.candidate_name || 'Candidate'}
-                  {' '}{hasRemoteMedia ? '• Live Video 📹 🎙️' : '• Connecting'}
+                  {' '}{hasRemoteMedia ? '• Live Video Connected' : '• Connecting'}
                 </span>
               </div>
 
               {/* Interviewer Self Status Overlay */}
               <div style={{ position: 'absolute', top: '12px', right: '12px', zIndex: 4 }}>
                 <span className="participant-tag" style={{ background: 'rgba(15, 23, 42, 0.85)', border: '1px solid #334155' }}>
-                  You (Interviewer) • {isAudioMuted ? '🔇 Mic Muted' : '🎙️ Mic Active'}
+                  You (Interviewer) • {isAudioMuted ? 'Mic Muted' : 'Mic Active'}
                 </span>
               </div>
             </div>
@@ -1202,7 +1461,7 @@ export default function InterviewRoom({ interviewId, user, onLeave, onInterviewC
               {/* Candidate Self Info Overlay */}
               <div className="video-overlay-info">
                 <span className="participant-tag">
-                  You ({effectiveUser?.full_name || 'Candidate'}) • Camera Preview 📹 {isAudioMuted ? '🔇' : '🎙️'}
+                  You ({effectiveUser?.full_name || 'Candidate'}) • Camera Active • {isAudioMuted ? 'Mic Muted' : 'Mic Active'}
                 </span>
               </div>
 
@@ -1212,7 +1471,7 @@ export default function InterviewRoom({ interviewId, user, onLeave, onInterviewC
                   background: peerConnected ? 'rgba(22, 101, 52, 0.85)' : 'rgba(15, 23, 42, 0.85)',
                   border: `1px solid ${peerConnected ? '#22c55e' : '#334155'}`
                 }}>
-                  {peerConnected ? '🎙️ Interviewer Voice Connected' : '⏳ Waiting for Interviewer...'}
+                  {peerConnected ? 'Interviewer Audio Connected' : 'Waiting for Interviewer...'}
                 </span>
               </div>
             </div>
@@ -1226,7 +1485,7 @@ export default function InterviewRoom({ interviewId, user, onLeave, onInterviewC
               onClick={toggleAudio}
               title={isAudioMuted ? 'Unmute Microphone' : 'Mute Microphone'}
             >
-              <span style={{ fontSize: '1.1rem' }}>{isAudioMuted ? '🔇' : '🎙️'}</span>
+              
               <span>{isAudioMuted ? 'Unmute' : 'Mute'}</span>
             </button>
 
@@ -1237,7 +1496,7 @@ export default function InterviewRoom({ interviewId, user, onLeave, onInterviewC
                 onClick={toggleVideo}
                 title={isVideoMuted ? 'Turn Camera On' : 'Turn Camera Off'}
               >
-                <span style={{ fontSize: '1.1rem' }}>{isVideoMuted ? '📷' : '📹'}</span>
+                
                 <span>{isVideoMuted ? 'Start Video' : 'Stop Video'}</span>
               </button>
             )}
@@ -1248,7 +1507,7 @@ export default function InterviewRoom({ interviewId, user, onLeave, onInterviewC
               onClick={handleEndInterview}
               title={isInterviewer ? 'End Interview' : 'Leave Call'}
             >
-              <span style={{ fontSize: '1.1rem' }}>⏹️</span>
+              
               <span>{isInterviewer ? 'End Session' : 'Leave Call'}</span>
             </button>
           </div>
@@ -1270,6 +1529,12 @@ export default function InterviewRoom({ interviewId, user, onLeave, onInterviewC
               onClick={() => setActiveSideTab('chat')}
             >
               Chat {chatMessages.length > 0 && `(${chatMessages.length})`}
+            </button>
+            <button
+              className={`tab-btn ${activeSideTab === 'transcript' ? 'active' : ''}`}
+              onClick={() => setActiveSideTab('transcript')}
+            >
+              Transcript {liveTranscriptTurns.length > 0 && `(${liveTranscriptTurns.length})`}
             </button>
           </div>
 
@@ -1368,6 +1633,79 @@ export default function InterviewRoom({ interviewId, user, onLeave, onInterviewC
                   Send
                 </button>
               </form>
+            </div>
+          )}
+
+          {/* Tab 3: Real-Time Live Speech Transcript */}
+          {activeSideTab === 'transcript' && (
+            <div className="sidebar-content" style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
+              <div style={{ padding: '0.65rem 0.85rem', borderBottom: '1px solid #e2e8f0', background: '#f8fafc', fontSize: '0.75rem', color: '#64748b', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                <span style={{ fontWeight: 600 }}>Live Speech Transcription</span>
+                <span className={`badge ${isAudioMuted ? 'badge-scheduled' : isSpeechListening ? 'badge-completed' : 'badge-role'}`} style={{ fontSize: '0.7rem' }}>
+                  {isAudioMuted ? 'Mic Muted' : isSpeechListening ? 'Listening' : 'Ready'}
+                </span>
+              </div>
+              <div style={{ overflowY: 'auto', flex: 1, padding: '0.75rem', display: 'flex', flexDirection: 'column', gap: '0.6rem' }}>
+                {liveTranscriptTurns.length === 0 && !interimTranscript ? (
+                  <div style={{ textAlign: 'center', color: '#94a3b8', padding: '2rem 1rem', fontSize: '0.825rem' }}>
+                    Speak into your microphone. Words are transcribed live here in real time.
+                  </div>
+                ) : (
+                  <>
+                    {liveTranscriptTurns.map((turn, idx) => (
+                      <div
+                        key={idx}
+                        style={{
+                          background: turn.speaker === 'interviewer' ? '#eff6ff' : '#ffffff',
+                          border: '1px solid #e2e8f0',
+                          borderLeft: `3px solid ${turn.speaker === 'interviewer' ? '#2563eb' : '#16a34a'}`,
+                          borderRadius: '6px',
+                          padding: '0.6rem 0.75rem',
+                          fontSize: '0.8rem'
+                        }}
+                      >
+                        <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '0.2rem' }}>
+                          <span style={{ fontWeight: 700, color: turn.speaker === 'interviewer' ? '#2563eb' : '#16a34a', fontSize: '0.75rem' }}>
+                            {turn.speaker_name || turn.speaker}
+                          </span>
+                          <span style={{ color: '#94a3b8', fontSize: '0.7rem' }}>
+                            {turn.timestamp}
+                          </span>
+                        </div>
+                        <p style={{ margin: 0, color: '#1e293b', lineHeight: 1.35 }}>
+                          {turn.text}
+                        </p>
+                      </div>
+                    ))}
+
+                    {/* Live in-progress speaking turn */}
+                    {interimTranscript && (
+                      <div
+                        style={{
+                          background: '#f0fdf4',
+                          border: '1px dashed #86efac',
+                          borderLeft: '3px solid #22c55e',
+                          borderRadius: '6px',
+                          padding: '0.6rem 0.75rem',
+                          fontSize: '0.8rem'
+                        }}
+                      >
+                        <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '0.2rem' }}>
+                          <span style={{ fontWeight: 700, color: '#16a34a', fontSize: '0.75rem' }}>
+                            {effectiveUser?.full_name || (isInterviewer ? 'Interviewer' : 'Candidate')} (Speaking now...)
+                          </span>
+                          <span style={{ color: '#22c55e', fontSize: '0.7rem', fontWeight: 600 }}>
+                            Transcribing...
+                          </span>
+                        </div>
+                        <p style={{ margin: 0, color: '#15803d', fontStyle: 'italic', lineHeight: 1.35 }}>
+                          "{interimTranscript}..."
+                        </p>
+                      </div>
+                    )}
+                  </>
+                )}
+              </div>
             </div>
           )}
         </aside>

@@ -41,9 +41,11 @@ export default function App() {
       {/* Top Navigation */}
       <header className="navbar">
         <div className="brand-logo" onClick={() => !currentUser && setAuthModalConfig(null)}>
-          <span style={{ color: '#2563eb', fontSize: '1.4rem' }}>✦</span>
-          <span>IntervAI</span>
-          <span className="brand-badge">Phase 6 Behaviour AI</span>
+          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#2563eb" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+            <path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5" />
+          </svg>
+          <span style={{ letterSpacing: '-0.02em', fontWeight: 700 }}>IntervAI</span>
+          <span className="brand-badge">Enterprise AI</span>
         </div>
 
         <div className="nav-actions">

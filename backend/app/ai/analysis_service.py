@@ -189,55 +189,110 @@ def transcribe_uploaded_audio_file(
 ) -> List[Dict[str, Any]]:
     """
     Transcribes an uploaded audio recording into timestamped dialogue segments
-    aligned with the interview questions.
+    aligned with the interview questions using real Speech-to-Text (speech_recognition).
     """
-    file_size = os.path.getsize(audio_path) if os.path.exists(audio_path) else 0
-    # Estimate audio duration (approx 16KB/sec for 128kbps audio or WebM)
-    est_duration_seconds = max(60, min(1800, int(file_size / 16000))) if file_size > 0 else 300
+    raw_transcription = None
+    transcription_error = None
     
+    if os.path.exists(audio_path) and os.path.getsize(audio_path) > 100:
+        try:
+            import speech_recognition as sr
+            recognizer = sr.Recognizer()
+            # Try transcribing directly with SpeechRecognition
+            try:
+                with sr.AudioFile(audio_path) as source:
+                    audio_data = recognizer.record(source)
+                    raw_transcription = recognizer.recognize_google(audio_data)
+            except Exception as direct_err:
+                # If direct reading failed (e.g. mp3/webm/m4a), try conversion via pydub
+                try:
+                    from pydub import AudioSegment
+                    wav_temp = audio_path + "_converted.wav"
+                    sound = AudioSegment.from_file(audio_path)
+                    sound = sound.set_channels(1).set_frame_rate(16000)
+                    sound.export(wav_temp, format="wav")
+                    with sr.AudioFile(wav_temp) as source:
+                        audio_data = recognizer.record(source)
+                        raw_transcription = recognizer.recognize_google(audio_data)
+                    if os.path.exists(wav_temp):
+                        os.remove(wav_temp)
+                except Exception as conv_err:
+                    transcription_error = f"Speech recognition note: {str(direct_err)}"
+        except Exception as e:
+            transcription_error = str(e)
+            
     timeline = []
     num_qs = max(1, len(questions))
-    turn_length = max(30, int(est_duration_seconds / num_qs))
+    current_sec = 10
     
-    current_sec = 15
-    for idx, q in enumerate(questions):
-        q_id = q.get("id", idx + 1)
-        q_text = q.get("question_text", f"Question {idx+1}")
+    # If real speech was successfully transcribed from audio
+    if raw_transcription and raw_transcription.strip():
+        words = raw_transcription.strip().split()
+        chunk_size = max(12, len(words) // num_qs)
         
-        m_q = current_sec // 60
-        s_q = current_sec % 60
-        ts_q = f"{m_q:02d}:{s_q:02d}"
-        
-        timeline.append({
-            "speaker": "interviewer",
-            "speaker_name": interviewer_name,
-            "text": q_text,
-            "timestamp": ts_q,
-            "question_id": q_id
-        })
-        
-        current_sec += 25
-        m_a = current_sec // 60
-        s_a = current_sec % 60
-        ts_a = f"{m_a:02d}:{s_a:02d}"
-        
-        # Audio-derived spoken answer excerpt
-        cand_answer = (
-            f"Regarding {q_text.split()[-1] if q_text.split() else 'this requirement'}: "
-            f"In our production implementation, we prioritize asynchronous execution, automated testing, "
-            f"and robust system architecture. We verified response metrics under load to ensure high reliability."
-        )
-        
-        timeline.append({
-            "speaker": "candidate",
-            "speaker_name": candidate_name,
-            "text": cand_answer,
-            "timestamp": ts_a,
-            "question_id": q_id
-        })
-        
-        current_sec += turn_length
-        
+        for idx, q in enumerate(questions):
+            q_id = q.get("id", idx + 1)
+            q_text = q.get("question_text", f"Question {idx+1}")
+            
+            ts_q = f"{(current_sec // 60):02d}:{(current_sec % 60):02d}"
+            timeline.append({
+                "speaker": "interviewer",
+                "speaker_name": interviewer_name,
+                "text": q_text,
+                "timestamp": ts_q,
+                "question_id": q_id
+            })
+            
+            current_sec += 15
+            ts_a = f"{(current_sec // 60):02d}:{(current_sec % 60):02d}"
+            
+            start_w = idx * chunk_size
+            end_w = (idx + 1) * chunk_size if idx < num_qs - 1 else len(words)
+            segment_words = words[start_w:end_w]
+            
+            if segment_words:
+                cand_answer = " ".join(segment_words)
+            else:
+                cand_answer = f"{raw_transcription}"
+                
+            timeline.append({
+                "speaker": "candidate",
+                "speaker_name": candidate_name,
+                "text": cand_answer,
+                "timestamp": ts_a,
+                "question_id": q_id
+            })
+            current_sec += 35
+    else:
+        # If no speech could be transcribed or file was empty/silent
+        for idx, q in enumerate(questions):
+            q_id = q.get("id", idx + 1)
+            q_text = q.get("question_text", f"Question {idx+1}")
+            
+            ts_q = f"{(current_sec // 60):02d}:{(current_sec % 60):02d}"
+            timeline.append({
+                "speaker": "interviewer",
+                "speaker_name": interviewer_name,
+                "text": q_text,
+                "timestamp": ts_q,
+                "question_id": q_id
+            })
+            
+            current_sec += 15
+            ts_a = f"{(current_sec // 60):02d}:{(current_sec % 60):02d}"
+            
+            notice = "No clear spoken words detected in audio." if not transcription_error else f"Notice: {transcription_error}"
+            cand_answer = f"Candidate response: {notice}"
+            
+            timeline.append({
+                "speaker": "candidate",
+                "speaker_name": candidate_name,
+                "text": cand_answer,
+                "timestamp": ts_a,
+                "question_id": q_id
+            })
+            current_sec += 30
+            
     return timeline
 
 

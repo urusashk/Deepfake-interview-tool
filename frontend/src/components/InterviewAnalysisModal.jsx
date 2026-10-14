@@ -23,6 +23,21 @@ export default function InterviewAnalysisModal({ interviewId, onClose }) {
     loadAnalysisData();
   }, [interviewId]);
 
+  useEffect(() => {
+    const handleKeyDown = (e) => {
+      if (e.key === 'Escape') {
+        if (showSamplePreview) {
+          setShowSamplePreview(false);
+        } else if (onClose) {
+          onClose();
+        }
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [showSamplePreview, onClose]);
+
+
   const loadAnalysisData = async () => {
     try {
       setLoading(true);
@@ -92,6 +107,7 @@ export default function InterviewAnalysisModal({ interviewId, onClose }) {
     }
   };
 
+
   // 3. Real Audio file upload & transcription
   const handleAudioUpload = async (e) => {
     const file = e.target.files?.[0];
@@ -129,25 +145,25 @@ export default function InterviewAnalysisModal({ interviewId, onClose }) {
   const getClaimBadge = (status) => {
     switch (status) {
       case 'consistent':
-        return <span className="badge" style={{ backgroundColor: '#f0fdf4', color: '#15803d', border: '1px solid #bbf7d0' }}>✓ Consistent with Resume</span>;
+        return <span className="badge" style={{ backgroundColor: '#f0fdf4', color: '#15803d', border: '1px solid #bbf7d0' }}>Consistent with Resume</span>;
       case 'potential_inconsistency':
-        return <span className="badge" style={{ backgroundColor: '#fffbeb', color: '#b45309', border: '1px solid #fde68a' }}>⚠️ Potential Inconsistency</span>;
+        return <span className="badge" style={{ backgroundColor: '#fffbeb', color: '#b45309', border: '1px solid #fde68a' }}>Potential Inconsistency</span>;
       case 'unsupported':
-        return <span className="badge" style={{ backgroundColor: '#f1f5f9', color: '#475569', border: '1px solid #cbd5e1' }}>ℹ️ Unsupported Claim</span>;
+        return <span className="badge" style={{ backgroundColor: '#f1f5f9', color: '#475569', border: '1px solid #cbd5e1' }}>Unsupported Claim</span>;
       default:
         return <span className="badge badge-role">{status}</span>;
     }
   };
 
   return (
-    <div className="modal-backdrop">
-      <div className="modal-content" style={{ maxWidth: '1100px', maxHeight: '94vh', display: 'flex', flexDirection: 'column', padding: 0, overflow: 'hidden' }}>
+    <div className="modal-backdrop" onClick={onClose}>
+      <div className="modal-content" onClick={(e) => e.stopPropagation()} style={{ maxWidth: '1100px', maxHeight: '94vh', display: 'flex', flexDirection: 'column', padding: 0, overflow: 'hidden' }}>
         
         {/* Modal Header */}
         <div style={{ padding: '1.25rem 1.75rem', borderBottom: '1px solid #e2e8f0', display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: '#ffffff', flexWrap: 'wrap', gap: '0.75rem' }}>
           <div>
             <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem' }}>
-              <span style={{ fontSize: '1.4rem' }}>🧠</span>
+              <span className="badge badge-role" style={{ fontSize: "0.75rem", padding: "3px 8px" }}>AI Report</span>
               <h2 style={{ fontSize: '1.25rem', fontWeight: 700, color: '#0f172a', margin: 0 }}>
                 AI Interview Analysis & Performance Report
               </h2>
@@ -165,17 +181,6 @@ export default function InterviewAnalysisModal({ interviewId, onClose }) {
           </div>
 
           <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem', flexWrap: 'wrap' }}>
-            {/* Load Sample Transcript Button (Demo Data Workflow) */}
-            <button
-              className="btn btn-sm"
-              onClick={handleFetchSampleTranscript}
-              disabled={loadingSample || retrying || uploadingAudio}
-              style={{ background: '#f8fafc', border: '1px solid #cbd5e1', color: '#334155', fontWeight: 600, display: 'inline-flex', alignItems: 'center', gap: '0.35rem' }}
-              title="Demonstrate AI analysis using a realistic sample transcript without camera"
-            >
-              <span>📥</span> {loadingSample ? 'Loading Sample...' : 'Load Sample Transcript (Demo)'}
-            </button>
-
             {/* Upload Real Audio Button */}
             <input
               type="file"
@@ -189,9 +194,20 @@ export default function InterviewAnalysisModal({ interviewId, onClose }) {
               onClick={() => fileInputRef.current?.click()}
               disabled={uploadingAudio || retrying || loadingSample}
               style={{ display: 'inline-flex', alignItems: 'center', gap: '0.35rem' }}
-              title="Upload real interview audio recording (.wav, .mp3, .m4a, .webm)"
+              title="Upload real interview audio recording (.wav, .mp3, .m4a, .webm, .flac)"
             >
-              <span>🎙️</span> {uploadingAudio ? 'Transcribing...' : 'Upload Audio'}
+              {uploadingAudio ? 'Transcribing...' : 'Upload Audio'}
+            </button>
+
+            {/* Load Sample Transcript Button (Demo Data Workflow) */}
+            <button
+              className="btn btn-sm"
+              onClick={handleFetchSampleTranscript}
+              disabled={loadingSample || retrying || uploadingAudio}
+              style={{ background: '#f8fafc', border: '1px solid #cbd5e1', color: '#334155', fontWeight: 600, display: 'inline-flex', alignItems: 'center', gap: '0.35rem' }}
+              title="Demonstrate AI analysis using a realistic sample transcript without camera"
+            >
+              {loadingSample ? 'Loading Sample...' : 'Sample Transcript'}
             </button>
 
             {/* Re-Analyze Button */}
@@ -201,7 +217,7 @@ export default function InterviewAnalysisModal({ interviewId, onClose }) {
               disabled={retrying || loading || uploadingAudio || loadingSample}
               title="Re-run AI evaluation engine on current transcript"
             >
-              {retrying ? 'Analyzing...' : '🔄 Re-Analyze'}
+              {retrying ? 'Analyzing...' : 'Re-Analyze'}
             </button>
 
             <button
@@ -226,7 +242,7 @@ export default function InterviewAnalysisModal({ interviewId, onClose }) {
             gap: '1rem'
           }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem' }}>
-              <span style={{ fontSize: '1.1rem' }}>💡</span>
+              
               <div style={{ fontSize: '0.825rem', color: '#92400e' }}>
                 <strong>DEMO DATA:</strong> Evaluated using realistic sample candidate responses grounded in the candidate's resume and job questions (camera bypass mode). All question ratings and claim checks were generated by the active AI model.
               </div>
@@ -251,7 +267,7 @@ export default function InterviewAnalysisModal({ interviewId, onClose }) {
 
         {loading ? (
           <div style={{ padding: '4rem', textAlign: 'center', color: '#64748b' }}>
-            <div style={{ fontSize: '2rem', marginBottom: '0.5rem' }}>⚙️</div>
+            
             <div>Processing interview analysis and evaluating speech transcripts...</div>
           </div>
         ) : (
@@ -322,7 +338,7 @@ export default function InterviewAnalysisModal({ interviewId, onClose }) {
               {/* Status Badges */}
               <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
                 <span className="badge badge-completed">
-                  ✓ {analysis.question_evaluations?.length || 0} Questions Evaluated
+                  {analysis.question_evaluations?.length || 0} Questions Evaluated
                 </span>
                 <span className="badge badge-role">
                   {analysis.resume_claims?.length || 0} Claims Verified
@@ -337,28 +353,28 @@ export default function InterviewAnalysisModal({ interviewId, onClose }) {
                 onClick={() => setActiveTab('evaluations')}
                 style={{ padding: '0.85rem 1.15rem', fontSize: '0.875rem' }}
               >
-                🎯 Question-by-Question Evaluation ({analysis.question_evaluations?.length || 0})
+                Question Evaluation ({analysis.question_evaluations?.length || 0})
               </button>
               <button
                 className={`tab-btn ${activeTab === 'claims' ? 'active' : ''}`}
                 onClick={() => setActiveTab('claims')}
                 style={{ padding: '0.85rem 1.15rem', fontSize: '0.875rem' }}
               >
-                📑 Resume Claim Verification ({analysis.resume_claims?.length || 0})
+                Resume Claims ({analysis.resume_claims?.length || 0})
               </button>
               <button
                 className={`tab-btn ${activeTab === 'behaviour' ? 'active' : ''}`}
                 onClick={() => setActiveTab('behaviour')}
                 style={{ padding: '0.85rem 1.15rem', fontSize: '0.875rem' }}
               >
-                📊 Behaviour & Media Authenticity
+                Behaviour & Authenticity
               </button>
               <button
                 className={`tab-btn ${activeTab === 'transcript' ? 'active' : ''}`}
                 onClick={() => setActiveTab('transcript')}
                 style={{ padding: '0.85rem 1.15rem', fontSize: '0.875rem' }}
               >
-                🎙️ Session Transcript ({analysis.full_transcript?.length || 0})
+                Full Transcript ({analysis.full_transcript?.length || 0})
               </button>
             </div>
 
@@ -443,11 +459,11 @@ export default function InterviewAnalysisModal({ interviewId, onClose }) {
                               <div style={{ background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: '8px', padding: '0.85rem 1rem', marginTop: '0.75rem' }}>
                                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.35rem' }}>
                                   <span style={{ fontSize: '0.75rem', fontWeight: 700, color: '#2563eb' }}>
-                                    🗣️ Candidate Answer Transcript
+                                    Candidate Answer Transcript
                                   </span>
                                   {currentQ.timestamp_start && (
                                     <span style={{ fontSize: '0.75rem', color: '#64748b' }}>
-                                      ⏱️ {currentQ.timestamp_start} - {currentQ.timestamp_end}
+                                      {currentQ.timestamp_start} - {currentQ.timestamp_end}
                                     </span>
                                   )}
                                 </div>
@@ -494,7 +510,7 @@ export default function InterviewAnalysisModal({ interviewId, onClose }) {
                             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem' }}>
                               <div style={{ background: '#f0fdf4', border: '1px solid #bbf7d0', borderRadius: '8px', padding: '1rem' }}>
                                 <div style={{ fontSize: '0.85rem', fontWeight: 700, color: '#166534', marginBottom: '0.5rem', display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
-                                  <span>✨</span> Key Strengths:
+                                  Key Strengths:
                                 </div>
                                 <ul style={{ paddingLeft: '1.25rem', fontSize: '0.8rem', color: '#166534', display: 'flex', flexDirection: 'column', gap: '0.35rem', margin: 0 }}>
                                   {currentQ.key_strengths?.map((str, sIdx) => (
@@ -505,7 +521,7 @@ export default function InterviewAnalysisModal({ interviewId, onClose }) {
 
                               <div style={{ background: '#fffbeb', border: '1px solid #fde68a', borderRadius: '8px', padding: '1rem' }}>
                                 <div style={{ fontSize: '0.85rem', fontWeight: 700, color: '#b45309', marginBottom: '0.5rem', display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
-                                  <span>💡</span> Missing Points & Suggestions:
+                                   Missing Points & Suggestions:
                                 </div>
                                 <ul style={{ paddingLeft: '1.25rem', fontSize: '0.8rem', color: '#b45309', display: 'flex', flexDirection: 'column', gap: '0.35rem', margin: 0 }}>
                                   {currentQ.missing_points?.map((mis, mIdx) => (
@@ -518,7 +534,7 @@ export default function InterviewAnalysisModal({ interviewId, onClose }) {
                             {/* Explanation Card */}
                             <div style={{ background: '#ffffff', border: '1px solid #e2e8f0', borderRadius: '8px', padding: '1rem' }}>
                               <div style={{ fontSize: '0.85rem', fontWeight: 700, color: '#0f172a', marginBottom: '0.25rem' }}>
-                                🤖 AI Evaluation Summary:
+                                AI Evaluation Summary:
                               </div>
                               <p style={{ fontSize: '0.825rem', color: '#475569', margin: 0, lineHeight: 1.4 }}>
                                 {currentQ.explanation}
@@ -557,7 +573,7 @@ export default function InterviewAnalysisModal({ interviewId, onClose }) {
                         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem', marginBottom: '0.75rem' }}>
                           <div style={{ background: '#f8fafc', padding: '0.75rem 1rem', borderRadius: '6px', border: '1px solid #e2e8f0' }}>
                             <div style={{ fontSize: '0.75rem', fontWeight: 600, color: '#2563eb', marginBottom: '0.25rem' }}>
-                              🗣️ Spoken Answer Excerpt:
+                              Spoken Answer Excerpt:
                             </div>
                             <p style={{ fontSize: '0.8rem', color: '#334155', margin: 0, lineHeight: 1.4 }}>
                               "{claim.answer_excerpt}"
@@ -566,7 +582,7 @@ export default function InterviewAnalysisModal({ interviewId, onClose }) {
 
                           <div style={{ background: '#f8fafc', padding: '0.75rem 1rem', borderRadius: '6px', border: '1px solid #e2e8f0' }}>
                             <div style={{ fontSize: '0.75rem', fontWeight: 600, color: '#15803d', marginBottom: '0.25rem' }}>
-                              📄 Resume Document Evidence:
+                              Resume Document Evidence:
                             </div>
                             <p style={{ fontSize: '0.8rem', color: '#334155', margin: 0, lineHeight: 1.4 }}>
                               {claim.resume_evidence || 'No direct evidence found on uploaded resume document.'}
@@ -589,7 +605,7 @@ export default function InterviewAnalysisModal({ interviewId, onClose }) {
                   {/* Compliance Banner */}
                   <div style={{ background: '#eff6ff', border: '1px solid #bfdbfe', borderRadius: '8px', padding: '1rem 1.25rem' }}>
                     <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.25rem' }}>
-                      <span style={{ fontSize: '1.1rem' }}>🛡️</span>
+                      
                       <h4 style={{ fontSize: '0.95rem', fontWeight: 700, color: '#1e40af', margin: 0 }}>
                         Objective Behavioural & Acoustic Observation Metrics
                       </h4>
@@ -603,7 +619,7 @@ export default function InterviewAnalysisModal({ interviewId, onClose }) {
                   <div>
                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.75rem' }}>
                       <h3 style={{ fontSize: '1.05rem', fontWeight: 700, color: '#0f172a', margin: 0, display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
-                        <span>📹</span> Video Observable Signals & Kinematics
+                        Video Observable Signals & Kinematics
                       </h3>
                       <span className={`badge ${analysis.behaviour_analysis?.video_behaviour?.status === 'not_available' ? 'badge-scheduled' : 'badge-completed'}`}>
                         Status: {analysis.behaviour_analysis?.video_behaviour?.status === 'not_available' ? 'Not Available' : 'Completed'}
@@ -612,7 +628,7 @@ export default function InterviewAnalysisModal({ interviewId, onClose }) {
 
                     {analysis.behaviour_analysis?.video_behaviour?.status === 'not_available' ? (
                       <div style={{ background: '#ffffff', border: '1px solid #e2e8f0', borderRadius: '8px', padding: '1.75rem', textAlign: 'center' }}>
-                        <div style={{ fontSize: '2rem', marginBottom: '0.5rem' }}>📹</div>
+                        
                         <div style={{ fontSize: '0.95rem', fontWeight: 700, color: '#0f172a' }}>Video Feed Not Available</div>
                         <p style={{ fontSize: '0.825rem', color: '#64748b', maxWidth: '580px', margin: '0.4rem auto 0 auto', lineHeight: 1.45 }}>
                           {analysis.behaviour_analysis?.video_behaviour?.note ||
@@ -663,7 +679,7 @@ export default function InterviewAnalysisModal({ interviewId, onClose }) {
                             <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
                               {analysis.behaviour_analysis.video_behaviour.timeline_events.map((evt, idx) => (
                                 <div key={idx} style={{ display: 'flex', alignItems: 'flex-start', gap: '0.75rem', padding: '0.5rem 0.75rem', background: '#f8fafc', borderRadius: '6px', border: '1px solid #e2e8f0', fontSize: '0.825rem' }}>
-                                  <span style={{ fontWeight: 700, color: '#2563eb', minWidth: '48px' }}>⏱️ {evt.timestamp}</span>
+                                  <span style={{ fontWeight: 700, color: '#2563eb', minWidth: '48px' }}>{evt.timestamp}</span>
                                   <span className="badge badge-role" style={{ fontSize: '0.7rem' }}>{evt.signal_type}</span>
                                   <span style={{ color: '#334155', flex: 1 }}>{evt.observation}</span>
                                   <span style={{ color: '#94a3b8', fontSize: '0.75rem' }}>Conf: {Math.round(evt.confidence * 100)}%</span>
@@ -680,7 +696,7 @@ export default function InterviewAnalysisModal({ interviewId, onClose }) {
                   <div>
                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.75rem' }}>
                       <h3 style={{ fontSize: '1.05rem', fontWeight: 700, color: '#0f172a', margin: 0, display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
-                        <span>🎙️</span> Audio Speech Dynamics & Pacing
+                        Audio Speech Dynamics & Pacing
                       </h3>
                       <span className="badge badge-role">
                         Status: {analysis.behaviour_analysis?.audio_behaviour?.status === 'not_available' ? 'Not Available' : 'Completed'}
@@ -689,7 +705,7 @@ export default function InterviewAnalysisModal({ interviewId, onClose }) {
 
                     {analysis.behaviour_analysis?.audio_behaviour?.status === 'not_available' ? (
                       <div style={{ background: '#ffffff', border: '1px solid #e2e8f0', borderRadius: '8px', padding: '1.5rem', textAlign: 'center' }}>
-                        <div style={{ fontSize: '1.75rem', marginBottom: '0.35rem' }}>🎙️</div>
+                        
                         <div style={{ fontSize: '0.9rem', fontWeight: 700, color: '#0f172a' }}>Audio Telemetry Not Available</div>
                         <p style={{ fontSize: '0.825rem', color: '#64748b', margin: '0.25rem 0 0 0' }}>
                           Upload an audio recording to compute acoustic pacing, latency, and filler density.
@@ -743,7 +759,7 @@ export default function InterviewAnalysisModal({ interviewId, onClose }) {
                             <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
                               {analysis.behaviour_analysis.audio_behaviour.audio_timeline.map((evt, idx) => (
                                 <div key={idx} style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', padding: '0.5rem 0.75rem', background: '#f8fafc', borderRadius: '6px', border: '1px solid #e2e8f0', fontSize: '0.825rem' }}>
-                                  <span style={{ fontWeight: 700, color: '#16a34a', minWidth: '48px' }}>⏱️ {evt.timestamp}</span>
+                                  <span style={{ fontWeight: 700, color: '#16a34a', minWidth: '48px' }}>{evt.timestamp}</span>
                                   <span className="badge" style={{ background: '#f0fdf4', color: '#166534', fontSize: '0.7rem', border: '1px solid #bbf7d0' }}>{evt.observation_type}</span>
                                   <span style={{ color: '#334155', flex: 1 }}>{evt.observation}</span>
                                   <span style={{ color: '#64748b', fontWeight: 600, fontSize: '0.75rem' }}>{evt.value}</span>
@@ -760,7 +776,7 @@ export default function InterviewAnalysisModal({ interviewId, onClose }) {
                   <div>
                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.75rem' }}>
                       <h3 style={{ fontSize: '1.05rem', fontWeight: 700, color: '#0f172a', margin: 0, display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
-                        <span>🛡️</span> Deepfake & Media Authenticity Inspection
+                        Deepfake & Media Authenticity Inspection
                       </h3>
                       <span className={`badge ${analysis.behaviour_analysis?.deepfake_detection?.status === 'not_available' ? 'badge-scheduled' : 'badge-completed'}`}>
                         Status: {analysis.behaviour_analysis?.deepfake_detection?.status === 'not_available' ? 'Not Available' : 'Completed'}
@@ -769,7 +785,7 @@ export default function InterviewAnalysisModal({ interviewId, onClose }) {
 
                     {analysis.behaviour_analysis?.deepfake_detection?.status === 'not_available' ? (
                       <div style={{ background: '#ffffff', border: '1px solid #e2e8f0', borderRadius: '8px', padding: '1.5rem', textAlign: 'center' }}>
-                        <div style={{ fontSize: '1.75rem', marginBottom: '0.35rem' }}>🔍</div>
+                        
                         <div style={{ fontSize: '0.9rem', fontWeight: 700, color: '#0f172a' }}>Deepfake Analysis: Not Available</div>
                         <p style={{ fontSize: '0.825rem', color: '#64748b', maxWidth: '580px', margin: '0.4rem auto 0 auto', lineHeight: 1.45 }}>
                           {analysis.behaviour_analysis?.deepfake_detection?.note ||
@@ -779,7 +795,7 @@ export default function InterviewAnalysisModal({ interviewId, onClose }) {
                     ) : (
                       <div style={{ background: '#f0fdf4', border: '1px solid #bbf7d0', borderRadius: '8px', padding: '1.25rem' }}>
                         <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.35rem' }}>
-                          <span style={{ fontSize: '1.2rem' }}>✓</span>
+                          
                           <span style={{ fontWeight: 700, color: '#166534' }}>
                             Media Authenticity Confirmed: {analysis.behaviour_analysis?.deepfake_detection?.authenticity_score || 98}% Confidence
                           </span>
@@ -829,7 +845,7 @@ export default function InterviewAnalysisModal({ interviewId, onClose }) {
                             {entry.speaker_name || (entry.speaker === 'interviewer' ? 'Interviewer' : 'Candidate')}
                           </span>
                           <span style={{ fontSize: '0.75rem', color: '#94a3b8' }}>
-                            ⏱️ {entry.timestamp}
+                            {entry.timestamp}
                           </span>
                         </div>
                         <p style={{ fontSize: '0.85rem', color: '#1e293b', margin: 0, lineHeight: 1.45 }}>
@@ -859,7 +875,7 @@ export default function InterviewAnalysisModal({ interviewId, onClose }) {
 
       {/* SAMPLE TRANSCRIPT PREVIEW & CONFIRMATION MODAL */}
       {showSamplePreview && samplePreviewData && (
-        <div className="modal-backdrop" style={{ zIndex: 1100 }}>
+        <div className="modal-backdrop" style={{ zIndex: 1100 }} onClick={() => setShowSamplePreview(false)}>
           <div className="modal-content" style={{ maxWidth: '850px', maxHeight: '88vh', display: 'flex', flexDirection: 'column', padding: 0, overflow: 'hidden' }}>
             {/* Header */}
             <div style={{ padding: '1.25rem 1.5rem', borderBottom: '1px solid #e2e8f0', display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: '#f8fafc' }}>
@@ -887,7 +903,7 @@ export default function InterviewAnalysisModal({ interviewId, onClose }) {
             {/* Preview Transcript Body */}
             <div style={{ flex: 1, overflowY: 'auto', padding: '1.25rem 1.5rem', background: '#f1f5f9', display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
               <div className="alert alert-info" style={{ fontSize: '0.8rem', margin: 0 }}>
-                ℹ️ <strong>Camera Bypass Demo:</strong> This sample transcript allows demonstrating the complete AI analysis pipeline without requiring live camera capture. Answers demonstrate diverse correctness levels, resume corroborations, and an unsupported claim to test the verification model.
+                <strong>Camera Bypass Demo:</strong> This sample transcript allows demonstrating the complete AI analysis pipeline without requiring live camera capture. Answers demonstrate diverse correctness levels, resume corroborations, and an unsupported claim to test the verification model.
               </div>
 
               {samplePreviewData.transcript?.map((item, idx) => (
@@ -906,7 +922,7 @@ export default function InterviewAnalysisModal({ interviewId, onClose }) {
                       {item.speaker_name || (item.speaker === 'interviewer' ? 'Interviewer' : 'Candidate')}
                     </span>
                     <span style={{ fontSize: '0.725rem', color: '#94a3b8' }}>
-                      ⏱️ {item.timestamp}
+                      {item.timestamp}
                     </span>
                   </div>
                   <p style={{ fontSize: '0.825rem', color: '#1e293b', margin: 0, lineHeight: 1.4 }}>
@@ -931,7 +947,7 @@ export default function InterviewAnalysisModal({ interviewId, onClose }) {
                 disabled={loadingSample}
                 style={{ fontWeight: 600 }}
               >
-                {loadingSample ? 'Analyzing Sample...' : '🚀 Run AI Analysis on Sample Transcript'}
+                {loadingSample ? 'Analyzing Sample...' : 'Run AI Analysis on Sample Transcript'}
               </button>
             </div>
           </div>

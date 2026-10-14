@@ -1393,6 +1393,16 @@ async def websocket_interview_signaling(
                     "timestamp": datetime.utcnow().isoformat()
                 })
 
+            elif msg_type == "transcript-turn":
+                # Real-time spoken transcript turns broadcast to room participants
+                turn_data = data.get("turn")
+                if turn_data:
+                    await manager.broadcast_to_room(interview_id, {
+                        "type": "transcript-turn",
+                        "turn": turn_data,
+                        "sender_id": user.id
+                    }, sender_ws=websocket)
+
             elif msg_type == "media-state":
                 # Mic / Camera mute status changes
                 await manager.broadcast_to_room(interview_id, {
